@@ -1,0 +1,55 @@
+{
+  "name": "rhymegraph",
+  "version": "0.1.0",
+  "description": "A local-first writing instrument for exploring rhyme by sound, meaning, and flow.",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SJMakin/RhymeGraph.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SJMakin/RhymeGraph/issues"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "predev": "npm run workers:build",
+    "dev": "next dev",
+    "prebuild": "npm run workers:build",
+    "build": "next build",
+    "start": "node scripts/serve-export.mjs",
+    "data:build": "node scripts/build-lexicon.mjs",
+    "workers:build": "vite build --config scripts/workers.vite.config.ts",
+    "test": "npm run test:unit",
+    "test:unit": "node --experimental-strip-types --test tests/phonetics.test.mjs tests/lexicon-pack.test.mjs tests/semantic.test.ts",
+    "test:site": "npm run build && npm run test:browser:prod",
+    "test:browser": "playwright test",
+    "test:browser:prod": "playwright test --config playwright.prod.config.ts",
+    "pages:build": "node scripts/run-pages-build.mjs",
+    "test:pages": "node scripts/run-pages-build.mjs --test",
+    "lint": "eslint . --ignore-pattern public"
+  },
+  "dependencies": {
+    "lucide-react": "^1.28.0",
+    "next": "16.3.0",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "@playwright/test": "^1.62.1",
+    "@tailwindcss/postcss": "4.2.1",
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "cmu-pronouncing-dictionary": "^3.0.0",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.3.0",
+    "tailwindcss": "4.2.1",
+    "typescript": "5.9.3",
+    "vite": "8.0.13",
+    "wordnet-db": "^3.1.14"
+  },
+  "type": "module"
+}
