@@ -2,6 +2,10 @@ import { expect, test, type Page } from "@playwright/test";
 
 const basePath = process.env.PLAYWRIGHT_BASE_PATH ?? "";
 const appPath = (path: string) => `${basePath}${path}`;
+const allowedRuntimeHosts = new Set(["127.0.0.1", "localhost"]);
+if (process.env.PLAYWRIGHT_BASE_URL) {
+  allowedRuntimeHosts.add(new URL(process.env.PLAYWRIGHT_BASE_URL).hostname);
+}
 
 function watchRuntime(page: Page) {
   const externalRequests: string[] = [];
@@ -9,7 +13,7 @@ function watchRuntime(page: Page) {
   page.on("request", (request) => {
     const url = new URL(request.url());
     if (url.protocol === "http:" || url.protocol === "https:") {
-      if (url.hostname !== "127.0.0.1" && url.hostname !== "localhost") {
+      if (!allowedRuntimeHosts.has(url.hostname)) {
         externalRequests.push(request.url());
       }
     }
