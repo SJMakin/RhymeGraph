@@ -4,6 +4,8 @@ RhymeGraph is a local-first writing instrument for exploring rhyme as a neighbou
 
 Nothing typed into the studio is sent to a rhyme service. The pronunciation lexicon, search worker, MiniLM model, and inference runtime are shipped with the app and run in the browser.
 
+**[Open the live studio](https://sjmakin.github.io/RhymeGraph/)**
+
 ![The RhymeGraph writing studio](./docs/rhymegraph-studio.png)
 
 ## Run it
@@ -53,4 +55,11 @@ npm run lint
 - Press `P` to pin the selected word, `I` to insert it, and `Ctrl/Cmd+Z` to undo the last insertion.
 - Use Bridge with a concept such as “escape” or “home” to blend phonetic and semantic fit.
 
-See [SPEC.md](./SPEC.md) for the product and technical specification, and [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for data and model attribution.
+## Current limits
+
+- The pronunciation pack is labelled General American (`en-US`); it is not a universal model of English or rap dialects.
+- The shipped phrase pack has eight authored examples. Unknown single words are reported rather than assigned a guessed pronunciation.
+- The semantic path currently starts automatically and transfers roughly 46 MiB of uncompressed model/runtime assets, or about 47 MiB including the lexicon. Sound results remain available if it fails.
+- The graph is a stable projection of the current ranked neighbourhood, not yet a corpus-wide embedding cluster map.
+
+See the [product and technical specification](./SPEC.md), [implementation status](./docs/STATUS.md), [implementation diary](./docs/IMPLEMENTATION_DIARY.md), and [evidence-led roadmap](./docs/ROADMAP.md). Data and model attribution is recorded in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).

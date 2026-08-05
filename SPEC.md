@@ -2,6 +2,9 @@
 
 ## Product and technical specification
 
+> [!IMPORTANT]
+> This document is the original product and architecture specification, not a claim that every section shipped in v0.1. See [implementation status](./docs/STATUS.md), the [implementation diary](./docs/IMPLEMENTATION_DIARY.md), and the [current roadmap](./docs/ROADMAP.md) for the source of truth.
+
 | Field | Value |
 |---|---|
 | Status | Draft v0.2 — ready for product review |

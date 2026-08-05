@@ -207,16 +207,33 @@ function scorePronunciations(left: Pronunciation, right: Pronunciation): RhymeCo
   const leftCoda = left.phonemes.slice(finalVowelIndexLeft + 1);
   const rightCoda = right.phonemes.slice(finalVowelIndexRight + 1);
   const assonance = sequenceSimilarity(leftVowels, rightVowels, vowelSimilarity, .45);
-  const consonance = sequenceSimilarity(leftConsonants, rightConsonants, consonantSimilarity, .38);
-  const coda = sequenceSimilarity(leftCoda, rightCoda, consonantSimilarity, .45);
+  const hasConsonanceEvidence = leftConsonants.length > 0 || rightConsonants.length > 0;
+  const hasCodaEvidence = leftCoda.length > 0 || rightCoda.length > 0;
+  const consonance = hasConsonanceEvidence
+    ? sequenceSimilarity(leftConsonants, rightConsonants, consonantSimilarity, .38)
+    : 0;
+  const coda = hasCodaEvidence
+    ? sequenceSimilarity(leftCoda, rightCoda, consonantSimilarity, .45)
+    : 0;
   const fullTail = sequenceSimilarity(leftTail, rightTail, phonemeSimilarity, .4);
   const stress = stressSimilarity(
     leftVowels.map((phone) => phone.stress ?? 0),
     rightVowels.map((phone) => phone.stress ?? 0),
   );
   // Coda is kept separate for explanation, while consonance rewards longer
-  // coherent consonant patterns in multisyllabic and mosaic matches.
-  const phonetic = .4 * assonance + .2 * consonance + .14 * coda + .16 * fullTail + .1 * stress;
+  // coherent consonant patterns in multisyllabic and mosaic matches. When both
+  // sides have no consonants, omit those signals instead of awarding perfect
+  // empty-sequence matches and renormalize the evidence that is present.
+  const consonanceWeight = hasConsonanceEvidence ? .2 : 0;
+  const codaWeight = hasCodaEvidence ? .14 : 0;
+  const weightTotal = .4 + consonanceWeight + codaWeight + .16 + .1;
+  const phonetic = (
+    .4 * assonance +
+    consonanceWeight * consonance +
+    codaWeight * coda +
+    .16 * fullTail +
+    .1 * stress
+  ) / weightTotal;
   return {
     assonance: roundScore(assonance),
     consonance: roundScore(consonance),
@@ -456,7 +473,16 @@ export function createRhymeEngine(entries: readonly LexiconEntryInput[]): RhymeE
         }
       }
       if (family.mean < minPhonetic) continue;
-      const semantic = clamp01(semanticScores[item.normalized] ?? 0);
+      const rawSemantic = Object.prototype.hasOwnProperty.call(
+        semanticScores,
+        item.normalized,
+      )
+        ? semanticScores[item.normalized]
+        : 0;
+      const semantic =
+        typeof rawSemantic === "number" && Number.isFinite(rawSemantic)
+          ? clamp01(rawSemantic)
+          : 0;
       const utility = item.frequency;
       const sound = intentSoundScore(request.intent, family);
       const score = roundScore((weights.sound * sound + weights.meaning * semantic + weights.utility * utility) / weightTotal);

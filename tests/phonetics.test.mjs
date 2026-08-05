@@ -45,6 +45,29 @@ test("keeps assonance and consonance as distinct evidence", () => {
   assert.ok(handBond.components.phonetic > .55);
 });
 
+test("does not invent consonance when both rhyme tails are open vowels", () => {
+  const custom = createRhymeEngine([
+    { text: "flow", pronunciations: ["F L OW1"] },
+    { text: "go", pronunciations: ["G OW1"] },
+    { text: "yeah", pronunciations: ["Y AE1"] },
+  ]);
+  const exact = custom.compare("flow", "go");
+  const mismatch = custom.compare("flow", "yeah");
+  assert.ok(exact && mismatch);
+
+  assert.equal(exact.components.consonance, 0);
+  assert.equal(exact.components.coda, 0);
+  assert.ok(exact.components.phonetic > .95);
+  assert.ok(exact.labels.includes("full-rhyme"));
+  assert.equal(exact.labels.includes("consonance"), false);
+  assert.doesNotMatch(exact.explanation.join(" "), /consonant/i);
+
+  assert.ok(mismatch.components.phonetic < .45);
+  assert.equal(mismatch.labels.includes("consonance"), false);
+  assert.equal(mismatch.labels.includes("slant"), false);
+  assert.doesNotMatch(mismatch.explanation.join(" "), /consonant/i);
+});
+
 test("does not confuse rhotic and central vowels as a full rhyme", () => {
   const custom = createRhymeEngine([
     { text: "love", pronunciations: ["L AH1 V"] },
@@ -127,4 +150,28 @@ test("uses one candidate pronunciation across a pinned rhyme family", () => {
     new Set(bow.anchorComparisons.map((comparison) => comparison.rightPronunciation.source)),
     new Set([bow.pronunciation.source]),
   );
+});
+
+test("ignores inherited or non-finite semantic scores and keeps rankings ordered", () => {
+  const custom = createRhymeEngine([
+    { text: "anchor", pronunciations: ["AE1 N K ER0"], frequency: .7 },
+    { text: "answer", pronunciations: ["AE1 N S ER0"], frequency: .9 },
+    { text: "constructor", pronunciations: ["K AH0 N S T R AH1 K T ER0"], frequency: .4 },
+    { text: "wander", pronunciations: ["W AA1 N D ER0"], frequency: .6 },
+  ]);
+
+  const semanticScores = Object.create({ constructor: 1 });
+  semanticScores.answer = Number.NaN;
+  const results = custom.recommend({
+    anchors: ["anchor"],
+    intent: "continue",
+    minPhonetic: 0,
+    semanticScores,
+    limit: 10,
+  });
+
+  assert.equal(results.find((item) => item.item.normalized === "constructor")?.semantic, 0);
+  assert.equal(results.find((item) => item.item.normalized === "answer")?.semantic, 0);
+  assert.ok(results.every((item) => Number.isFinite(item.score)));
+  assert.ok(results.every((item, index) => index === 0 || results[index - 1].score >= item.score));
 });

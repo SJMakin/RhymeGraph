@@ -77,7 +77,8 @@ for (const [rawKey, pronunciation] of Object.entries(dictionary)) {
 
   // CMUdict contains acronyms, possessives, proper names, and corpus artefacts.
   // Keep normal lyric-friendly spellings here and leave richer normalization to
-  // the runtime. This still produces a broad 100k+ local vocabulary.
+  // the runtime. This produces a broad intermediate vocabulary; the WordNet and
+  // curated filter below determines the smaller pack that is actually shipped.
   if (!/^[a-z]+(?:['-][a-z]+)*$/.test(word) || word.length > 28) continue;
 
   const pronunciationTokens = pronunciation.split(/\s+/);
