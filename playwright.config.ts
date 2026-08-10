@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
+const externalBaseURL = process.env.PLAYWRIGHT_BASE_URL?.trim();
+const baseURL = externalBaseURL || "http://localhost:3000";
 const crossBrowser = process.env.PLAYWRIGHT_CROSS_BROWSER === "1";
 const projects = [
   {
@@ -36,11 +37,13 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  webServer: {
-    command: "npm run dev",
-    url: baseURL,
-    reuseExistingServer: true,
-    timeout: 120_000,
-  },
+  webServer: externalBaseURL
+    ? undefined
+    : {
+        command: "npm run dev",
+        url: baseURL,
+        reuseExistingServer: true,
+        timeout: 120_000,
+      },
   projects,
 });

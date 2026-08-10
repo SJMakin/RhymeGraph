@@ -29,6 +29,8 @@ The Pages workflow builds and browser-tests the app at its real repository subpa
 npm run test:pages  # exercise the /RhymeGraph production path locally
 ```
 
+For a manual post-deploy audit, set `PLAYWRIGHT_BASE_URL=https://sjmakin.github.io` and `PLAYWRIGHT_BASE_PATH=/RhymeGraph`, then run `npm run test:browser`. Supplying the external URL disables the local development server; tests run against the live deployment.
+
 ## Useful commands
 
 ```bash
