@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:rhymegraph:research-session:1",
+  "title": "RhymeGraph local research session export",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaId", "schemaVersion", "appVersion", "generatedAt", "privacy", "session", "context", "summary", "events"],
+  "properties": {
+    "schemaId": { "const": "urn:rhymegraph:research-session:1" },
+    "schemaVersion": { "const": "1.0.0" },
+    "appVersion": { "type": "string", "minLength": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fullDraftIncluded", "sentToNetwork", "excluded", "included"],
+      "properties": {
+        "fullDraftIncluded": { "const": false },
+        "sentToNetwork": { "const": false },
+        "excluded": { "const": ["draftText", "projectTitle", "cursorPositions"] },
+        "included": { "const": ["anchors", "concept", "candidateActions", "settings", "timings"] }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "startedAt", "durationMs", "eventCount"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "durationMs": { "$ref": "#/$defs/timing" },
+        "eventCount": { "type": "integer", "minimum": 0, "maximum": 500 }
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchor", "pinnedAnchors", "intent", "meaningMix", "adventurousness", "meaningState"],
+      "properties": {
+        "anchor": { "$ref": "#/$defs/word" },
+        "pinnedAnchors": { "type": "array", "maxItems": 4, "items": { "$ref": "#/$defs/word" } },
+        "concept": { "type": "string", "maxLength": 120 },
+        "intent": { "$ref": "#/$defs/intent" },
+        "meaningMix": { "$ref": "#/$defs/percentage" },
+        "adventurousness": { "$ref": "#/$defs/percentage" },
+        "meaningState": { "enum": ["idle", "loading", "ready", "error"] }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidatesSelected", "candidatesInserted", "candidatesUndone", "candidatesExpanded", "candidatesPinned", "neighbourhoodsExplored", "mapViews", "listViews"],
+      "properties": {
+        "candidatesSelected": { "$ref": "#/$defs/count" },
+        "candidatesInserted": { "$ref": "#/$defs/count" },
+        "candidatesUndone": { "$ref": "#/$defs/count" },
+        "candidatesExpanded": { "$ref": "#/$defs/count" },
+        "candidatesPinned": { "$ref": "#/$defs/count" },
+        "neighbourhoodsExplored": { "$ref": "#/$defs/count" },
+        "mapViews": { "$ref": "#/$defs/count" },
+        "listViews": { "$ref": "#/$defs/count" }
+      }
+    },
+    "events": {
+      "type": "array",
+      "maxItems": 500,
+      "items": { "$ref": "#/$defs/event" }
+    }
+  },
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+    "timing": { "type": "integer", "minimum": 0, "maximum": 604800000 },
+    "percentage": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "word": { "type": "string", "maxLength": 96 },
+    "intent": { "enum": ["continue", "bridge", "pivot"] },
+    "event": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "engine", "phase", "atMs"],
+          "properties": {
+            "type": { "const": "engine" },
+            "engine": { "enum": ["sound", "meaning"] },
+            "phase": { "enum": ["started", "ready", "disabled", "error"] },
+            "durationMs": { "$ref": "#/$defs/timing" },
+            "trigger": { "enum": ["preference", "control", "bridge", "mix", "retry"] },
+            "itemCount": { "$ref": "#/$defs/count" },
+            "atMs": { "$ref": "#/$defs/timing" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "intent", "atMs"],
+          "properties": { "type": { "const": "intent" }, "intent": { "$ref": "#/$defs/intent" }, "atMs": { "$ref": "#/$defs/timing" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "anchor", "source", "atMs"],
+          "properties": { "type": { "const": "anchor" }, "anchor": { "$ref": "#/$defs/word" }, "source": { "enum": ["draft", "candidate"] }, "atMs": { "$ref": "#/$defs/timing" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "concept", "atMs"],
+          "properties": { "type": { "const": "concept" }, "concept": { "type": "string", "maxLength": 120 }, "atMs": { "$ref": "#/$defs/timing" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value", "atMs"],
+          "properties": { "type": { "const": "meaning_mix" }, "value": { "$ref": "#/$defs/percentage" }, "atMs": { "$ref": "#/$defs/timing" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "intent", "anchorCount", "resultCount", "durationMs", "atMs"],
+          "properties": {
+            "type": { "const": "neighbourhood" }, "intent": { "$ref": "#/$defs/intent" },
+            "anchorCount": { "$ref": "#/$defs/count" }, "resultCount": { "$ref": "#/$defs/count" },
+            "durationMs": { "$ref": "#/$defs/timing" }, "atMs": { "$ref": "#/$defs/timing" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "action", "candidate", "anchor", "intent", "atMs"],
+          "properties": {
+            "type": { "const": "candidate" },
+            "action": { "enum": ["selected", "pinned", "unpinned", "expanded", "inserted", "undone"] },
+            "candidate": { "$ref": "#/$defs/word" }, "anchor": { "$ref": "#/$defs/word" },
+            "intent": { "$ref": "#/$defs/intent" }, "rank": { "$ref": "#/$defs/count" },
+            "relation": { "enum": ["full-tail", "assonance", "consonance", "slant", "mosaic", "semantic"] },
+            "atMs": { "$ref": "#/$defs/timing" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "view", "atMs"],
+          "properties": { "type": { "const": "view" }, "view": { "enum": ["map", "list"] }, "atMs": { "$ref": "#/$defs/timing" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "atMs"],
+          "properties": { "type": { "const": "export" }, "atMs": { "$ref": "#/$defs/timing" } }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,467 @@
+{
+  "$schema": "./scenario-schema.v1.json",
+  "schemaVersion": "rhymegraph.evaluation-scenarios.v1",
+  "datasetId": "rhymegraph-fixture-development",
+  "datasetVersion": "1.1.0",
+  "split": "development",
+  "heldOut": false,
+  "judgement": {
+    "scale": "0-unrelated_1-usable_2-keep-worthy",
+    "reviewerCount": 0,
+    "reviewType": "unreviewed-machine-assisted",
+    "status": "provisional-development"
+  },
+  "provenance": "Machine-assisted development fixtures authored from the shipped CMUdict/WordNet pack, authored slang overrides, phrase fixtures, and existing engine examples. Zero human reviewers. Development use only; not independently collected or held out.",
+  "scenarios": [
+    {
+      "id": "dev-full-time",
+      "split": "development",
+      "category": "full-rhyme",
+      "anchor": "time",
+      "context": null,
+      "pins": [],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "judgements": [
+        { "candidate": "mine", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact stressed vowel with a close nasal coda." },
+        { "candidate": "rhyme", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /AY M/ rhyme tail." },
+        { "candidate": "lime", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /AY M/ rhyme tail." },
+        { "candidate": "late", "grade": 1, "relationships": ["slant"], "rationale": "Related diphthong shape with a changed coda." },
+        { "candidate": "table", "grade": 0, "relationships": [], "rationale": "Initial spelling overlap does not create a useful ending." }
+      ]
+    },
+    {
+      "id": "dev-full-cat",
+      "split": "development",
+      "category": "full-rhyme",
+      "anchor": "cat",
+      "context": null,
+      "pins": [],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "judgements": [
+        { "candidate": "hat", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /AE T/ rhyme tail." },
+        { "candidate": "bat", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /AE T/ rhyme tail." },
+        { "candidate": "cut", "grade": 1, "relationships": ["consonance", "slant"], "rationale": "The final /T/ lands while the vowel moves." },
+        { "candidate": "dog", "grade": 0, "relationships": [], "rationale": "No useful vowel or coda relationship." },
+        { "candidate": "music", "grade": 0, "relationships": [], "rationale": "Unrelated stress and rhyme tail." }
+      ]
+    },
+    {
+      "id": "dev-full-flow",
+      "split": "development",
+      "category": "full-rhyme",
+      "anchor": "flow",
+      "context": null,
+      "pins": [],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "judgements": [
+        { "candidate": "glow", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact open /OW/ rhyme." },
+        { "candidate": "snow", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact open /OW/ rhyme." },
+        { "candidate": "show", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact open /OW/ rhyme." },
+        { "candidate": "go", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact open /OW/ rhyme despite different onset." },
+        { "candidate": "yeah", "grade": 0, "relationships": [], "rationale": "Open ending alone is not sufficient." }
+      ]
+    },
+    {
+      "id": "dev-full-light",
+      "split": "development",
+      "category": "full-rhyme",
+      "anchor": "light",
+      "context": null,
+      "pins": [],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "judgements": [
+        { "candidate": "night", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /AY T/ rhyme tail." },
+        { "candidate": "life", "grade": 1, "relationships": ["assonance", "slant"], "rationale": "Strong /AY/ vowel with a changed final consonant." },
+        { "candidate": "late", "grade": 1, "relationships": ["consonance", "slant"], "rationale": "Final /T/ and diphthong movement make a usable slant." },
+        { "candidate": "dog", "grade": 0, "relationships": [], "rationale": "Unrelated rhyme tail." }
+      ]
+    },
+    {
+      "id": "dev-full-verse",
+      "split": "development",
+      "category": "full-rhyme",
+      "anchor": "verse",
+      "context": null,
+      "pins": [],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "judgements": [
+        { "candidate": "curse", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /ER S/ rhyme tail." },
+        { "candidate": "worse", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /ER S/ rhyme tail." },
+        { "candidate": "nurse", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /ER S/ rhyme tail." },
+        { "candidate": "force", "grade": 1, "relationships": ["consonance", "slant"], "rationale": "The /R S/ ending is preserved while the vowel changes." },
+        { "candidate": "table", "grade": 0, "relationships": [], "rationale": "No meaningful tail relationship." }
+      ]
+    },
+    {
+      "id": "dev-pivot-flame",
+      "split": "development",
+      "category": "pivot",
+      "anchor": "flame",
+      "context": "Leave the obvious flame/frame pair and open a neighbouring sound family",
+      "pins": [],
+      "intent": "pivot",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "notes": "Grades are Pivot-specific: an exact repetition is intentionally unsuitable.",
+      "judgements": [
+        { "candidate": "plain", "grade": 2, "relationships": ["assonance", "slant", "sound-pivot"], "rationale": "Keeps /EY/ while opening a distinct nasal family." },
+        { "candidate": "late", "grade": 2, "relationships": ["assonance", "slant", "sound-pivot"], "rationale": "Keeps the vowel family while moving decisively to a /T/ landing." },
+        { "candidate": "foam", "grade": 1, "relationships": ["consonance", "slant", "sound-pivot"], "rationale": "Keeps final /M/ while moving to a neighbouring diphthong." },
+        { "candidate": "frame", "grade": 0, "relationships": ["full-rhyme"], "rationale": "Excellent rhyme, but too close for the stated Pivot intent." },
+        { "candidate": "dog", "grade": 0, "relationships": [], "rationale": "Too remote to function as a recognisable pivot." }
+      ]
+    },
+    {
+      "id": "dev-assonance-vibe",
+      "split": "development",
+      "category": "assonance",
+      "anchor": "vibe",
+      "context": null,
+      "pins": [],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "judgements": [
+        { "candidate": "tribe", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /AY B/ rhyme tail." },
+        { "candidate": "live", "grade": 1, "relationships": ["assonance", "slant"], "rationale": "The /laiv/ pronunciation supplies strong /AY/ assonance." },
+        { "candidate": "time", "grade": 1, "relationships": ["assonance", "slant"], "rationale": "Shared stressed /AY/ keeps it usable." },
+        { "candidate": "drip", "grade": 0, "relationships": [], "rationale": "Spelling resemblance does not survive pronunciation." },
+        { "candidate": "dog", "grade": 0, "relationships": [], "rationale": "Unrelated rhyme tail." }
+      ]
+    },
+    {
+      "id": "dev-consonance-hand",
+      "split": "development",
+      "category": "consonance",
+      "anchor": "hand",
+      "context": null,
+      "pins": [],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "judgements": [
+        { "candidate": "land", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /AE N D/ rhyme tail." },
+        { "candidate": "band", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /AE N D/ rhyme tail." },
+        { "candidate": "bond", "grade": 1, "relationships": ["consonance", "slant"], "rationale": "The /N D/ coda is preserved under a vowel change." },
+        { "candidate": "bend", "grade": 1, "relationships": ["consonance", "slant"], "rationale": "The /N D/ coda is preserved under a vowel change." },
+        { "candidate": "music", "grade": 0, "relationships": [], "rationale": "No useful ending relationship." }
+      ]
+    },
+    {
+      "id": "dev-consonance-love",
+      "split": "development",
+      "category": "consonance",
+      "anchor": "love",
+      "context": "Love means we serve and rise above",
+      "pins": [],
+      "intent": "bridge",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "notes": "Grades combine the written context with sound; the current evaluator intentionally measures only the phonetic part.",
+      "judgements": [
+        { "candidate": "above", "grade": 2, "relationships": ["full-rhyme", "multi-syllabic"], "rationale": "Exact stressed tail and a direct bridge to the upward context." },
+        { "candidate": "serve", "grade": 2, "relationships": ["consonance", "slant"], "rationale": "The final /V/ keeps a sound edge while the word completes the context's idea." },
+        { "candidate": "dove", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact rhyme whose peace association can bridge the love context." },
+        { "candidate": "glove", "grade": 1, "relationships": ["full-rhyme"], "rationale": "Strong sound-only continuation with little contextual help." },
+        { "candidate": "cat", "grade": 0, "relationships": [], "rationale": "Neither the sound nor the context supplies a useful bridge." }
+      ]
+    },
+    {
+      "id": "dev-slant-quiet",
+      "split": "development",
+      "category": "slant",
+      "anchor": "quiet",
+      "context": null,
+      "pins": [],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "judgements": [
+        { "candidate": "riot", "grade": 2, "relationships": ["multi-syllabic", "slant"], "rationale": "The /AY AH T/ sequence closely tracks the two-syllable tail." },
+        { "candidate": "diet", "grade": 2, "relationships": ["multi-syllabic", "slant"], "rationale": "The /AY AH T/ sequence closely tracks the two-syllable tail." },
+        { "candidate": "night", "grade": 1, "relationships": ["assonance", "slant"], "rationale": "Condenses the stressed vowel and final /T/ into one syllable." },
+        { "candidate": "table", "grade": 0, "relationships": [], "rationale": "Syllable count alone does not make a rhyme." }
+      ]
+    },
+    {
+      "id": "dev-slant-breath",
+      "split": "development",
+      "category": "slant",
+      "anchor": "breath",
+      "context": null,
+      "pins": [],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "judgements": [
+        { "candidate": "death", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /EH TH/ rhyme tail." },
+        { "candidate": "path", "grade": 1, "relationships": ["consonance", "slant"], "rationale": "Final /TH/ is retained under a wider vowel." },
+        { "candidate": "birth", "grade": 1, "relationships": ["consonance", "slant"], "rationale": "Final /TH/ and a neighbouring central vowel make a loose rhyme." },
+        { "candidate": "music", "grade": 0, "relationships": [], "rationale": "Unrelated ending and stress shape." }
+      ]
+    },
+    {
+      "id": "dev-multisyllabic-violence",
+      "split": "development",
+      "category": "multi-syllabic",
+      "anchor": "violence",
+      "context": null,
+      "pins": [],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "judgements": [
+        { "candidate": "silence", "grade": 2, "relationships": ["multi-syllabic", "slant"], "rationale": "Strong stressed vowel and aligned unstressed consonant sequence." },
+        { "candidate": "defiance", "grade": 2, "relationships": ["multi-syllabic", "slant"], "rationale": "The stressed /AY/ and following weak-syllable tail align." },
+        { "candidate": "reliance", "grade": 2, "relationships": ["multi-syllabic", "slant"], "rationale": "The stressed /AY/ and following weak-syllable tail align." },
+        { "candidate": "table", "grade": 0, "relationships": [], "rationale": "Similar length without a related rhyme tail." }
+      ]
+    },
+    {
+      "id": "dev-multisyllabic-cavity",
+      "split": "development",
+      "category": "multi-syllabic",
+      "anchor": "cavity",
+      "context": null,
+      "pins": [],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "judgements": [
+        { "candidate": "gravity", "grade": 2, "relationships": ["multi-syllabic", "slant"], "rationale": "Stressed /AE/ and the following /V AH T IY/ tail align." },
+        { "candidate": "depravity", "grade": 2, "relationships": ["multi-syllabic", "slant"], "rationale": "The complete stressed and weak-syllable sequence closely aligns." },
+        { "candidate": "vanity", "grade": 2, "relationships": ["multi-syllabic", "slant"], "rationale": "Strong three-syllable correspondence with one medial consonant change." },
+        { "candidate": "city", "grade": 1, "relationships": ["assonance", "slant"], "rationale": "The weak /T IY/ ending survives in a shorter form." },
+        { "candidate": "dog", "grade": 0, "relationships": [], "rationale": "No useful relationship." }
+      ]
+    },
+    {
+      "id": "dev-multisyllabic-motion",
+      "split": "development",
+      "category": "multi-syllabic",
+      "anchor": "motion",
+      "context": "Set the ocean in motion and follow the current",
+      "pins": [],
+      "intent": "bridge",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "notes": "The semantic-only candidate is intentional; this report's phonetic-only scorer cannot measure its contextual value.",
+      "judgements": [
+        { "candidate": "commotion", "grade": 2, "relationships": ["full-rhyme", "multi-syllabic"], "rationale": "Exact rhyme tail and a strong conceptual continuation of movement." },
+        { "candidate": "locomotion", "grade": 2, "relationships": ["full-rhyme", "multi-syllabic"], "rationale": "Exact rhyme tail and an explicit movement bridge." },
+        { "candidate": "ocean", "grade": 2, "relationships": ["full-rhyme", "multi-syllabic"], "rationale": "Exact /OW SH AH N/ rhyme tail that also completes the water context." },
+        { "candidate": "current", "grade": 1, "relationships": [], "rationale": "Contextually useful movement/water bridge, but intentionally outside the phonetic family." },
+        { "candidate": "showman", "grade": 0, "relationships": ["assonance", "multi-syllabic", "slant"], "rationale": "Some sound overlap, but unsuitable for the stated Bridge context." },
+        { "candidate": "cat", "grade": 0, "relationships": [], "rationale": "Neither sound nor meaning supports the bridge." }
+      ]
+    },
+    {
+      "id": "dev-mosaic-orange",
+      "split": "development",
+      "category": "mosaic",
+      "anchor": "orange",
+      "context": null,
+      "pins": [],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "judgements": [
+        { "candidate": "door hinge", "grade": 2, "relationships": ["mosaic", "multi-syllabic", "slant"], "rationale": "Authored cross-word fixture preserves the rhotic onset and /N JH/ ending." },
+        { "candidate": "porridge", "grade": 2, "relationships": ["multi-syllabic", "slant"], "rationale": "Close two-syllable vowel and consonant sequence." },
+        { "candidate": "storage", "grade": 2, "relationships": ["multi-syllabic", "slant"], "rationale": "Closely aligned /AO R AH JH/ tail." },
+        { "candidate": "table", "grade": 0, "relationships": [], "rationale": "No useful relationship." }
+      ]
+    },
+    {
+      "id": "dev-mosaic-anatomy",
+      "split": "development",
+      "category": "mosaic",
+      "anchor": "anatomy",
+      "context": null,
+      "pins": [],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "judgements": [
+        { "candidate": "have at me", "grade": 2, "relationships": ["mosaic", "multi-syllabic", "slant"], "rationale": "The authored phrase crosses word boundaries while tracking the stressed and final vowel sequence." },
+        { "candidate": "academy", "grade": 2, "relationships": ["multi-syllabic", "slant"], "rationale": "A strong /AE ... AH M IY/ multisyllabic correspondence." },
+        { "candidate": "gravity", "grade": 1, "relationships": ["assonance", "multi-syllabic", "slant"], "rationale": "Shared stressed /AE/ and final /IY/ make a looser family." },
+        { "candidate": "dog", "grade": 0, "relationships": [], "rationale": "No useful relationship." }
+      ]
+    },
+    {
+      "id": "dev-family-time-mine",
+      "split": "development",
+      "category": "multi-pin",
+      "anchor": "time",
+      "context": null,
+      "pins": ["mine", "rhyme", "lime", "divine"],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "notes": "Five-anchor stress case: the family deliberately mixes /AY M/ and /AY N/ codas.",
+      "judgements": [
+        { "candidate": "design", "grade": 2, "relationships": ["assonance", "multi-syllabic", "slant"], "rationale": "Exact /AY N/ for two anchors and strong assonance across the /AY M/ half." },
+        { "candidate": "align", "grade": 2, "relationships": ["assonance", "multi-syllabic", "slant"], "rationale": "Exact /AY N/ for two anchors and a consistent stressed vowel across all five." },
+        { "candidate": "sublime", "grade": 2, "relationships": ["assonance", "multi-syllabic", "slant"], "rationale": "Exact /AY M/ for three anchors and a consistent stressed vowel across all five." },
+        { "candidate": "behind", "grade": 1, "relationships": ["assonance", "multi-syllabic", "slant"], "rationale": "Shared /AY/ family with an added final consonant that weakens the five-anchor fit." },
+        { "candidate": "light", "grade": 1, "relationships": ["assonance", "slant"], "rationale": "The common /AY/ survives, but /T/ fits neither coda subgroup closely." },
+        { "candidate": "dog", "grade": 0, "relationships": [], "rationale": "Does not fit the five-anchor family." }
+      ]
+    },
+    {
+      "id": "dev-family-hand-land",
+      "split": "development",
+      "category": "multi-pin",
+      "anchor": "hand",
+      "context": null,
+      "pins": ["land", "band"],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "notes": "Three-anchor exact-coda family used between the one-pin and four-pin workloads.",
+      "judgements": [
+        { "candidate": "grand", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /AE N D/ ending fits all three anchors." },
+        { "candidate": "sand", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /AE N D/ ending fits all three anchors." },
+        { "candidate": "bond", "grade": 1, "relationships": ["consonance", "slant"], "rationale": "The /N D/ coda fits all three, with a changed vowel." },
+        { "candidate": "bend", "grade": 1, "relationships": ["consonance", "slant"], "rationale": "The /N D/ coda fits all three, with a changed vowel." },
+        { "candidate": "music", "grade": 0, "relationships": [], "rationale": "Does not fit the pinned family." }
+      ]
+    },
+    {
+      "id": "dev-family-love-dove",
+      "split": "development",
+      "category": "multi-pin",
+      "anchor": "love",
+      "context": null,
+      "pins": ["dove"],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "judgements": [
+        { "candidate": "glove", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /AH V/ ending fits the intended dove pronunciation and love." },
+        { "candidate": "above", "grade": 2, "relationships": ["full-rhyme", "multi-syllabic"], "rationale": "The stressed /AH V/ tail fits both anchors." },
+        { "candidate": "move", "grade": 1, "relationships": ["consonance", "slant"], "rationale": "Final /V/ fits both while the vowel changes." },
+        { "candidate": "serve", "grade": 1, "relationships": ["consonance", "slant"], "rationale": "Final /V/ fits both while the rhotic vowel changes." },
+        { "candidate": "cat", "grade": 0, "relationships": [], "rationale": "Does not fit the pinned family." }
+      ]
+    },
+    {
+      "id": "dev-slang-cap",
+      "split": "development",
+      "category": "slang",
+      "anchor": "cap",
+      "context": "No cap, I came with the facts",
+      "pins": [],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "judgements": [
+        { "candidate": "rap", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /AE P/ rhyme tail." },
+        { "candidate": "trap", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /AE P/ rhyme tail." },
+        { "candidate": "map", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /AE P/ rhyme tail." },
+        { "candidate": "drip", "grade": 1, "relationships": ["consonance", "slant"], "rationale": "Final /P/ gives a deliberately loose bar-ending option." },
+        { "candidate": "dog", "grade": 0, "relationships": [], "rationale": "No useful sound relationship." }
+      ]
+    },
+    {
+      "id": "dev-slang-finna",
+      "split": "development",
+      "category": "slang",
+      "anchor": "finna",
+      "context": "I'm finna finish the verse",
+      "pins": [],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "judgements": [
+        { "candidate": "winner", "grade": 1, "relationships": ["assonance", "multi-syllabic", "slant"], "rationale": "Strong /IH N/ opening to the tail with a dialect-dependent final vowel." },
+        { "candidate": "sinner", "grade": 1, "relationships": ["assonance", "multi-syllabic", "slant"], "rationale": "Strong /IH N/ opening to the tail with a dialect-dependent final vowel." },
+        { "candidate": "dinner", "grade": 1, "relationships": ["assonance", "multi-syllabic", "slant"], "rationale": "Strong /IH N/ opening to the tail with a dialect-dependent final vowel." },
+        { "candidate": "table", "grade": 0, "relationships": [], "rationale": "No useful sound relationship." }
+      ]
+    },
+    {
+      "id": "dev-slang-rizz",
+      "split": "development",
+      "category": "slang",
+      "anchor": "rizz",
+      "context": "Talk slick, all rizz",
+      "pins": [],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "judgements": [
+        { "candidate": "fizz", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /IH Z/ rhyme tail." },
+        { "candidate": "quiz", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact /IH Z/ rhyme tail." },
+        { "candidate": "drip", "grade": 1, "relationships": ["assonance", "slant"], "rationale": "Shared /IH/ vowel creates a loose option." },
+        { "candidate": "dog", "grade": 0, "relationships": [], "rationale": "No useful sound relationship." }
+      ]
+    },
+    {
+      "id": "dev-ambiguous-bow",
+      "split": "development",
+      "category": "ambiguous-pronunciation",
+      "anchor": "flow",
+      "context": "Take a bow after the show",
+      "pins": [],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "judgements": [
+        { "candidate": "bow", "grade": 2, "relationships": ["full-rhyme"], "rationale": "The /boʊ/ reading is an exact rhyme; the engine must select that reading." },
+        { "candidate": "go", "grade": 2, "relationships": ["full-rhyme"], "rationale": "Exact open /OW/ rhyme." },
+        { "candidate": "now", "grade": 1, "relationships": ["assonance", "slant"], "rationale": "Neighbouring /AW/ diphthong makes a loose rhyme." },
+        { "candidate": "yeah", "grade": 0, "relationships": [], "rationale": "Open ending alone is not sufficient." }
+      ]
+    },
+    {
+      "id": "dev-pivot-time",
+      "split": "development",
+      "category": "pivot",
+      "anchor": "time",
+      "context": "I need a neighbouring family, not another exact rhyme",
+      "pins": [],
+      "intent": "pivot",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": true,
+      "notes": "Grades measure usefulness for Pivot. Exact repetition is intentionally downgraded.",
+      "judgements": [
+        { "candidate": "light", "grade": 2, "relationships": ["assonance", "sound-pivot"], "rationale": "Keeps /AY/ while opening a distinct final-consonant family." },
+        { "candidate": "life", "grade": 2, "relationships": ["assonance", "sound-pivot"], "rationale": "Keeps /AY/ while opening a distinct final-consonant family." },
+        { "candidate": "late", "grade": 1, "relationships": ["slant", "sound-pivot"], "rationale": "Moves both vowel and coda while retaining a weak connection." },
+        { "candidate": "mine", "grade": 0, "relationships": ["full-rhyme"], "rationale": "Strong sound match, but too close for the stated Pivot intent." },
+        { "candidate": "dog", "grade": 0, "relationships": [], "rationale": "Too remote to function as a recognisable pivot." }
+      ]
+    },
+    {
+      "id": "dev-unknown-skrrt",
+      "split": "development",
+      "category": "unknown-word",
+      "anchor": "skrrt",
+      "context": "Skrrt round the curb, make the word hurt",
+      "pins": [],
+      "intent": "continue",
+      "dialect": "en-US",
+      "expectedAnchorCoverage": false,
+      "notes": "Coverage probe only. The shipped lexicon has no pronunciation for this expressive form.",
+      "judgements": [
+        { "candidate": "hurt", "grade": 1, "relationships": ["assonance", "slant"], "rationale": "A plausible rhotic loose rhyme for a common spoken rendering." },
+        { "candidate": "word", "grade": 1, "relationships": ["assonance", "slant"], "rationale": "A plausible rhotic loose rhyme for a common spoken rendering." },
+        { "candidate": "dirt", "grade": 1, "relationships": ["assonance", "slant"], "rationale": "A plausible rhotic loose rhyme for a common spoken rendering." },
+        { "candidate": "time", "grade": 0, "relationships": [], "rationale": "No plausible relationship to the usual spoken form." },
+        { "candidate": "dog", "grade": 0, "relationships": [], "rationale": "No plausible relationship to the usual spoken form." }
+      ]
+    }
+  ]
+}

@@ -10,35 +10,44 @@ The strongest signal is not time spent admiring the graph. It is a writer insert
 
 ## Recommended sequence
 
-### M0 — Public-alpha guardrails
+### M0 — Public-alpha guardrails — shipped in v0.2.0
 
 **Goal:** establish a safe observation baseline before inviting writers into structured sessions.
 
-Build and decide:
+Shipped:
 
-- choose whether the semantic payload remains automatic or loads only when the writer enables meaning/Bridge;
-- run both root and `/RhymeGraph` production exports on pull requests;
-- add Chromium, Firefox, and WebKit core-loop smoke tests;
-- complete the core loop by keyboard and reach zero serious or critical automated accessibility findings;
-- inject semantic model/WASM failure and prove that useful sound-only results remain;
-- extend the external-request assertion to every browser scenario.
+- the semantic model, worker, and WASM now load only after **Enable meaning**, Bridge, or a non-zero meaning mix; the explicit choice is remembered locally and sound-only sessions request none of those assets;
+- pull requests run both root and `/RhymeGraph` production exports;
+- Chromium runs the full semantic loop, while Chromium, Firefox, and WebKit run the sound-first keyboard smoke path;
+- automated keyboard, accessible-name, visible-focus, focus-order, landmark, and heading checks cover the core loop;
+- injected semantic-worker failure proves useful sound-only results remain, with retry and disable controls available;
+- every browser scenario fails on a cross-origin runtime request.
 
-**Gate:** all three browser engines complete select → explore → insert, the keyboard path loses no action, semantic failure preserves the sound path, and the production/base-path checks are protected before the first structured user session.
+**Result:** the M0 guardrail slice is shipped. It is an observation baseline, not a claim of full WCAG, screen-reader, device, or fault-injection coverage; those remain in M4.
 
-### M1 — Evidence harness
+### M1 — Evidence harness — tooling foundation shipped; human evidence pending
 
 **Goal:** make recommendation quality measurable before tuning it.
 
-Build:
+Shipped in v0.2.0:
 
-- a versioned golden-set format for anchor, context, pins, intent, dialect, and judged candidates;
-- 25 fixture-derived development scenarios, then a judged corpus growing toward 150–200 cases across full rhyme, slant rhyme, assonance, consonance, multisyllabic rhyme, mosaic rhyme, pivots, multi-pin families, slang, and unknown words;
-- a separately sourced held-out split of at least 50 scenarios, frozen before ranking changes are tuned;
+- a versioned scenario format for anchor, context, pins, intent, dialect, and judged candidates;
+- 25 explicitly provisional, machine-assisted development fixtures spanning Continue, Bridge, and Pivot, plus multi-pin and five-anchor work;
 - a plain stressed-vowel/suffix baseline and a phonetic-only RhymeGraph baseline;
 - deterministic ranking snapshots and a command that produces a comparison report;
-- a Node sound benchmark for lexicon initialization and exhaustive/indexed search;
-- a browser benchmark for cold and warm sound readiness, semantic readiness, reranking, transfer size, and peak memory where available;
-- a local session-export format for voluntary research notes, with no telemetry endpoint.
+- a Node sound benchmark for lexicon initialization and exhaustive search;
+- a browser benchmark for cold and repeat sound readiness, semantic readiness, reranking, worker-inclusive encoded response sizes, and renderer heap where exposed, with wire-transfer and WASM/browser-process exclusions stated;
+- explicit Start / Export / Clear & stop research controls using per-page-session sessionStorage; the versioned local export contains anchors, concepts, candidate actions, settings, and timings while excluding the full draft, project title, and cursor positions; there is no telemetry or upload endpoint.
+
+The development harness currently evaluates only a phonetic labelled candidate pool. Its fixture grades were machine-assisted and have zero human reviewers, no independent judgement, and no held-out split. Its Bridge-labelled cases exercise intent-aware phonetic ranking; they do not test semantic Bridge quality. It is suitable for evaluator regression and hypothesis formation, not an unbiased ranking or product-quality claim.
+
+Still required:
+
+- grow toward 150–200 independently judged cases across full rhyme, slant rhyme, assonance, consonance, multisyllabic rhyme, mosaic rhyme, pivots, multi-pin families, slang, and unknown words;
+- source a separate held-out split of at least 50 scenarios and freeze it before ranking changes are tuned;
+- deepen representative Bridge and Pivot coverage, including a later semantic-quality study for Bridge;
+- run the benchmark protocols on controlled, named reference environments;
+- conduct the formative and observed target-writer sessions below.
 
 Use the first five target-writer sessions formatively, not as a statistical product gate. Continue to at least eight observed sessions and seek two independent judgements per evaluation scenario. Record whether writers can select an anchor, understand the three intents, insert a result, and traverse without coaching.
 
@@ -66,7 +75,7 @@ Treat local G2P as a later experiment, not the first response to missing words. 
 
 Before applying a timing gate, commit a reference manifest containing CPU, RAM, OS, browser/runtime version, power mode, throttle profile, evaluation-set revision, three warm-up passes, and at least 30 timed query-set passes. Do not compare benchmark reports with different manifests as though they were the same population.
 
-**Gate:** aim for sound-search p95 below 100 ms on the named desktop reference and 500 ms at 4× CPU throttle, with five-pin desktop p95 below 300 ms. An indexed retrieval pool of at most 512 candidates must recover at least 99% of all exhaustive top-25 membership slots across the frozen queries before exact reranking. For Bridge, require at least +.05 nDCG@10 over sound-only candidate generation and useful recall@25 of 85%. Semantic-badge precision—the share of top-25 candidates labelled semantic that both reviewers judge related to the requested concept—must reach 80%. Vocabulary work should report coverage by category rather than one flattering aggregate number.
+**Gate:** aim for sound-search p95 below 100 ms on the named desktop reference and 500 ms at 4× CPU throttle, with five-anchor desktop p95 below 300 ms. An indexed retrieval pool of at most 512 candidates must recover at least 99% of all exhaustive top-25 membership slots across the frozen queries before exact reranking. For Bridge, require at least +.05 nDCG@10 over sound-only candidate generation and useful recall@25 of 85%. Semantic-badge precision—the share of top-25 candidates labelled semantic that both reviewers judge related to the requested concept—must reach 80%. Vocabulary work should report coverage by category rather than one flattering aggregate number.
 
 ### M3 — Graph v2: a real neighbourhood map
 
@@ -128,31 +137,31 @@ Etymology, definitions, lexical relations, dialect provenance, and word-history 
 
 | Now | Next | Later |
 | --- | --- | --- |
-| Public-alpha browser/accessibility guardrails | Indexed phonetic retrieval | Known-text cadence spike |
-| Golden-set schema, evaluator, and ranking snapshots | Frequency and vocabulary work | Local STT feasibility |
-| Node and browser performance reports | Semantic/phonetic union retrieval | TTS audition mode |
-| Five formative writer sessions | Graph v2 experiment | Etymology and knowledge layers |
-| Decide project licence and semantic-load policy | User phrases, pronunciations, and dialect foundation | Any account, sharing, or publishing features |
-| Pages-subpath tests on pull requests | Broader accessibility/device hardening | Global corpus graph, only if local Graph v2 wins |
+| Independently review and broaden the provisional development set | Indexed phonetic retrieval | Known-text cadence spike |
+| Source and freeze the separate held-out split | Frequency and vocabulary work | Local STT feasibility |
+| Run controlled Node/browser reference benchmarks | Semantic/phonetic union retrieval | TTS audition mode |
+| Five formative writer sessions using manual local exports | Graph v2 experiment | Etymology and knowledge layers |
+| Decide project licence, explicit-vocabulary policy, and first dialect target | User phrases, pronunciations, and dialect foundation | Any account, sharing, or publishing features |
+| Maintain v0.2.0 root/Pages/cross-browser guardrails | Broader accessibility/device hardening | Global corpus graph, only if local Graph v2 wins |
 
-## First implementation slices
+## Delivered implementation slices
 
-First, ship **v0.1.1 — Guardrails**:
+**M0 — Guardrails**, shipped in v0.2.0:
 
-1. Test both root and Pages-subpath exports on pull requests.
-2. Add Firefox and WebKit core-loop smoke coverage alongside Chromium.
-3. Add keyboard/accessibility checks and semantic-asset failure injection.
-4. Apply the owner's semantic-loading decision and verify that sound-only use downloads no model/WASM when loading is on demand.
+1. Root and Pages-subpath exports are both protected on pull requests.
+2. Firefox and WebKit sound-loop smoke coverage accompanies the full Chromium path.
+3. Keyboard/accessibility assertions, same-origin audits, and semantic-worker failure injection protect the core loop.
+4. The owner's on-demand semantic-loading decision is implemented: Enable, Bridge, or a non-zero meaning mix starts the local stack; sound-only use fetches no model/WASM; the preference is remembered locally.
 
-Then build **v0.2 — Evidence**, kept deliberately small:
+**M1 — Evidence tooling foundation**, shipped in v0.2.0:
 
-1. Add `evaluation/scenarios.json` with a documented schema and 25 fixture-derived development cases; keep them out of the later held-out split.
-2. Add `npm run evaluate` to compare the current engine with a simple suffix baseline and write a machine-readable report.
-3. Add `npm run benchmark:sound` for lexicon/search timings and `npm run benchmark:browser` for the real production runtime; record device and runtime context with each report.
-4. Add a local “Export research session” action containing inputs, chosen candidates, timings, and an explicit schema version—but no automatic upload.
-5. Use the resulting artefacts in the first writer sessions, then expand toward 150–200 cases based on observed vocabulary rather than invented coverage.
+1. `evaluation/scenarios.v1.json` and its documented schema contain 25 provisional development scenarios; they are explicitly excluded from the later held-out split.
+2. `npm run evaluate` compares the current phonetic engine with a stressed-vowel/suffix baseline and writes a machine-readable labelled-pool report.
+3. `npm run benchmark:sound` records lexicon/search timings and `npm run benchmark:browser` records the production runtime; both reports include revision and environment context.
+4. **Start research session** explicitly begins per-page-session capture in sessionStorage; **Export research session** downloads a versioned JSON file locally; **Clear & stop** removes the capture. It records research-relevant actions and timings, excludes the full draft and project title, and performs no upload.
+5. The evaluation data remains deliberately provisional. Independent review, held-out evidence, controlled benchmark runs, and target-writer sessions are the next work—not claims attached to the tooling itself.
 
-These slices make the public alpha safer to observe, then create the evidence needed to choose between ranking work, vocabulary work, and graph work. They also let future implementation-diary entries cite results instead of impressions.
+These slices make the public alpha safer to observe and create the instrumentation needed to choose between ranking, vocabulary, and graph work. They do not yet answer the north-star question.
 
 ## Decisions needed from the owner
 
@@ -160,6 +169,5 @@ None blocks the evidence harness, but these should be settled before a broader p
 
 1. **Project licence:** the repository is public but currently has no top-level licence; public source is not automatically open source.
 2. **Explicit vocabulary:** uncensored by default, filtered by default, or a remembered local control.
-3. **Semantic loading:** automatic convenience versus an explicit roughly 45.8 MiB uncompressed local-AI download (about 47.3 MiB including the lexicon).
-4. **First dialect target:** deepen General American, add a UK profile, or choose a narrower scene/community with reviewers.
-5. **Research privacy:** local/manual session export only, or a future separate opt-in submission path.
+3. **First dialect target:** deepen General American, add a UK profile, or choose a narrower scene/community with reviewers.
+4. **Future research submission:** v0.2.0 is local/manual export only; whether a separate explicit opt-in submission path should ever exist remains undecided.

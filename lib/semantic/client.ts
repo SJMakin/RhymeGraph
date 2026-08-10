@@ -128,17 +128,17 @@ export class SemanticClient {
   private readonly handleMessage = (message: MessageEvent<unknown>): void => {
     if (!isSemanticWorkerEvent(message.data)) return;
     const event = message.data;
-    this.emit(event);
-
-    if (event.type === "progress") return;
     const pending = this.pending.get(event.requestId);
     if (!pending) return; // Superseded or otherwise stale response.
 
     if (event.type === "error") {
+      this.emit(event);
       pending.reject(new Error(event.message));
     } else if (event.type === "ready" && pending.kind === "init") {
+      this.emit(event);
       pending.resolve(event);
     } else if (event.type === "result" && pending.kind === "score") {
+      this.emit(event);
       pending.resolve(event.scores);
     } else {
       return;

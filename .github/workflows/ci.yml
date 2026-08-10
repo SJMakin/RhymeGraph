@@ -11,7 +11,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v7
@@ -24,5 +24,21 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm test
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:site
+      - name: Validate evidence inputs
+        run: npm run evaluate:check && npm run benchmark:sound:check
+      - name: Install browser engines
+        run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: Test the root production export
+        run: npm run test:site
+        env:
+          PLAYWRIGHT_CROSS_BROWSER: "1"
+          PLAYWRIGHT_SEMANTIC_SUITE: skip
+
+      - name: Test the GitHub Pages production export
+        if: github.event_name == 'pull_request'
+        run: npm run test:pages
+        env:
+          PAGES_BASE_PATH: /RhymeGraph
+          PAGES_SITE_ORIGIN: https://sjmakin.github.io
+          PLAYWRIGHT_CROSS_BROWSER: "1"

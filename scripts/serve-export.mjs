@@ -10,6 +10,7 @@ const { values } = parseArgs({
     port: { type: "string", default: "3000" },
     root: { type: "string", default: "out" },
     "base-path": { type: "string", default: "" },
+    "cache-control": { type: "string", default: "no-store" },
   },
 });
 
@@ -76,7 +77,8 @@ const server = createServer(async (request, response) => {
       "Content-Type",
       contentTypes.get(extname(filePath).toLowerCase()) ?? "application/octet-stream",
     );
-    response.setHeader("Cache-Control", "no-store");
+    response.setHeader("Cache-Control", values["cache-control"]);
+    response.setHeader("Content-Length", (await stat(filePath)).size);
     if (request.method === "HEAD") {
       response.writeHead(200).end();
       return;

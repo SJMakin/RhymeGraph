@@ -33,8 +33,8 @@ export class PhoneticSearchClient {
   private initPromise?: Promise<Extract<PhoneticWorkerEvent, { type: "ready" }>>;
   private latestSearchId?: number;
 
-  constructor() {
-    this.worker = new Worker(withBasePath("/workers/phonetic.worker.js"), {
+  constructor(worker?: Worker) {
+    this.worker = worker ?? new Worker(withBasePath("/workers/phonetic.worker.js"), {
       type: "module",
       name: "rhymegraph-phonetics",
     });
@@ -86,14 +86,22 @@ export class PhoneticSearchClient {
   private readonly onMessage = (message: MessageEvent<unknown>) => {
     if (!isPhoneticWorkerEvent(message.data)) return;
     const event = message.data;
-    this.listeners.forEach((listener) => listener(event));
-    if (event.type === "progress") return;
     const pending = this.pending.get(event.requestId);
-    if (!pending) return;
-    if (event.type === "error") pending.reject(new Error(event.message));
-    else if (event.type === "ready" && pending.kind === "init") pending.resolve(event);
-    else if (event.type === "result" && pending.kind === "search") pending.resolve(event.candidates);
-    else return;
+    if (!pending) return; // Superseded or otherwise stale response.
+    if (event.type === "progress") {
+      this.listeners.forEach((listener) => listener(event));
+      return;
+    }
+    if (event.type === "error") {
+      this.listeners.forEach((listener) => listener(event));
+      pending.reject(new Error(event.message));
+    } else if (event.type === "ready" && pending.kind === "init") {
+      this.listeners.forEach((listener) => listener(event));
+      pending.resolve(event);
+    } else if (event.type === "result" && pending.kind === "search") {
+      this.listeners.forEach((listener) => listener(event));
+      pending.resolve(event.candidates);
+    } else return;
     this.pending.delete(event.requestId);
     if (this.latestSearchId === event.requestId) this.latestSearchId = undefined;
   };

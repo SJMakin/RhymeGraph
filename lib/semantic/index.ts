@@ -2,7 +2,6 @@ export { createSemanticClient, SemanticClient, SemanticRequestSupersededError } 
 export { cosineSimilarity, rankByCosine } from "./cosine";
 export type {
   SemanticErrorEvent,
-  SemanticProgressEvent,
   SemanticReadyEvent,
   SemanticScore,
   SemanticWorkerEvent,

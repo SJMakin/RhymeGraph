@@ -4,8 +4,10 @@ This is a record of product and engineering decisions, the evidence behind them,
 
 ## Current snapshot
 
-**Date:** 4 August 2026  
-**Status:** public vertical slice, deployed and independently usable  
+**Date:** 11 August 2026
+
+**Status:** v0.2.0 public-alpha guardrails and evidence-tooling foundation
+
 **Live build:** [sjmakin.github.io/RhymeGraph](https://sjmakin.github.io/RhymeGraph/)  
 **Source:** [github.com/SJMakin/RhymeGraph](https://github.com/SJMakin/RhymeGraph)
 
@@ -13,14 +15,15 @@ This is a record of product and engineering decisions, the evidence behind them,
 | --- | --- |
 | Product | A writing workspace with graph and ranked-list views |
 | Sound retrieval | Stress-aware phonetic search in a dedicated browser worker |
-| Meaning | Local `all-MiniLM-L6-v2` inference in a second browser worker |
+| Meaning | Explicit, on-demand local `all-MiniLM-L6-v2` inference in a second browser worker; preference remembered locally |
 | Vocabulary | 35,510 General American entries, 39,175 pronunciations, and 8 authored phrase fixtures |
-| Persistence | Browser-local draft, title, anchor, pins, and traversal breadcrumbs |
+| Persistence | Draft/title/workspace state in localStorage; explicitly started research capture in per-tab sessionStorage; on Pages, both APIs are scoped to the shared `sjmakin.github.io` origin rather than isolated by repository path |
 | Hosting | Static Next.js export on GitHub Pages at `/RhymeGraph/` |
 | Runtime services | None; no rhyme, embedding, account, or analytics API |
-| Verification | 18 engine/data tests and 4 end-to-end browser scenarios |
+| Verification | Unit/data checks; root and Pages production paths; Chromium full loop; Firefox/WebKit sound-loop smoke; keyboard, same-origin, and semantic-failure guardrails |
+| Evidence | Versioned provisional labelled-pool evaluator, sound/browser benchmark protocols, and manual privacy-safe research-session export |
 
-The generated lexicon is about 1.43 MiB. The quantized ONNX model itself is about 21.9 MiB; model, tokenizer, ONNX runtime, and WASM together make the progressive semantic path roughly 45.8 MiB uncompressed, or about 47.3 MiB with the lexicon. It currently starts automatically after the sound engine. The complete static export is about 50.2 MiB.
+The generated lexicon is about 1.43 MiB. The quantized ONNX model itself is about 21.9 MiB; model, tokenizer, ONNX runtime, and WASM together make the progressive semantic path roughly 45.8 MiB uncompressed. The sound engine starts first. The semantic module, worker, model, and WASM remain unfetched until the writer enables meaning, chooses Bridge, or raises the meaning mix; that explicit choice is remembered in local browser storage.
 
 ## 4 August 2026 — From specification to working instrument
 
@@ -50,7 +53,7 @@ The first useful lesson was that source size is not coverage quality. Filtering 
 
 For the vertical slice, sound retrieval scans the full shipped vocabulary inside its worker and returns up to 72 candidates. The retrieval signature/index proposed in the specification is not implemented yet. This kept v0.1 simple and correct enough to inspect, at the cost of query latency.
 
-A post-launch Node diagnostic over 24 representative cases measured engine initialization at 371 ms and about 33.6 MiB additional heap; searches had a 291 ms median, 859 ms p95, and a 1,793 ms maximum for a five-pin case. That materially misses the specification's aspirational sub-100 ms p95. The diagnostic now needs to become a versioned benchmark rather than remain a one-off audit.
+A post-launch Node diagnostic over 24 representative cases measured engine initialization at 371 ms and about 33.6 MiB additional heap; searches had a 291 ms median, 859 ms p95, and a 1,793 ms maximum for a five-anchor case. That materially misses the specification's aspirational sub-100 ms p95. The diagnostic now needs to become a versioned benchmark rather than remain a one-off audit.
 
 ### 3. Loose rhyme was modelled as evidence, not a single label
 
@@ -71,7 +74,7 @@ Multi-pin search uses one pronunciation of each candidate across the whole famil
 
 The semantic worker runs a quantized 384-dimensional MiniLM model through Transformers.js and ONNX Runtime Web. Remote model access is disabled in code. If any local model asset is missing or initialization fails, RhymeGraph remains a sound-only instrument.
 
-The current semantic pass embeds the query and up to 72 phonetic candidates, computes cosine similarity, and reranks those candidates. It does **not** currently ship a precomputed embedding for every dictionary entry, sense, or gloss. Princeton WordNet is used only during the lexicon build as a lemma, part-of-speech, and sense-count source.
+The v0.1 semantic pass embedded the query and up to 72 phonetic candidates, computed cosine similarity, and reranked those candidates. It did **not** ship a precomputed embedding for every dictionary entry, sense, or gloss. Princeton WordNet was used only during the lexicon build as a lemma, part-of-speech, and sense-count source. v0.2.0 retains that ranking boundary while changing when the semantic stack loads.
 
 This reveals a structural limitation in **Bridge**: meaning can reorder the sound-generated pool, but it cannot retrieve a useful semantic bridge that falls outside the top 72 by sound. The UI also min-max normalises each semantic batch, so when scores differ the batch leader is rescaled to 100 even if every raw cosine is weak. Both behaviours need evaluation and calibration before the semantic score should be read as confidence.
 
@@ -94,7 +97,7 @@ The vertical slice includes:
 - selection- or caret-derived anchors inside the draft;
 - graph and ranked-list views;
 - Continue, Bridge, and Pivot recommendation intents;
-- up to five pinned family anchors;
+- up to five total family anchors: the active word plus as many as four pins;
 - sound/meaning balance and simple lexical filters;
 - candidate explanations, pronunciation, and component scores;
 - insert, expand, pin, undo, breadcrumbs, and keyboard actions;
@@ -131,6 +134,30 @@ The deployment initially failed because GitHub Pages had not yet been enabled fo
 
 **Follow-up:** build the golden-set evaluator, repeatable performance harness, and local research export described in the [roadmap](./ROADMAP.md); decide the semantic loading policy before deliberately driving wider traffic.
 
+## 10–11 August 2026 — Guardrails and evidence tooling before ranking claims
+
+**Question:** how can the public alpha remain fast and trustworthy for sound-only writing while creating enough reproducible evidence to decide what deserves improvement next?
+
+**Change:** v0.2.0 made semantics an explicit progressive enhancement. Sound search starts immediately; the semantic module, worker, model, and WASM load only after **Enable meaning**, Bridge, or a non-zero meaning mix. The writer's choice is remembered locally, loading can be cancelled, and a ready or failed semantic path can be disabled back to sound only. Semantic loading is deliberately shown as indeterminate: Transformers.js 4.2's numeric progress callback performed a full local-file metadata fetch before the real model fetch, transferring the 22.97 MB ONNX model twice. Removing that callback restored one model transfer without weakening the local-only boundary. The settings panel now provides explicit **Start research session**, **Export research session**, and **Clear & stop** controls. Capture exists only after Start and uses sessionStorage for the current page session. Its versioned JSON includes anchors, concepts, candidate actions, view/settings changes, and timings, while excluding the full draft, project title, and cursor positions; the app has no upload endpoint.
+
+The release checks now exercise root and GitHub Pages production paths. Chromium covers the full semantic writing loop; Chromium, Firefox, and WebKit cover the sound-first keyboard loop. Each browser scenario audits runtime requests for unexpected origins. Lightweight accessibility assertions cover names, focus, focus order, landmark, and heading structure, and an injected semantic-worker failure must preserve useful sound results.
+
+The evidence slice adds a versioned schema and 25-scenario provisional development set spanning Continue, Bridge, Pivot, multi-pin families, and a five-anchor workload. `npm run evaluate` compares the current phonetic scorer with a plain stressed-vowel/suffix baseline over the machine-assisted labelled development pool. `npm run benchmark:sound` records versioned Node initialization/search/memory observations, while `npm run benchmark:browser` records cold and repeat production readiness, worker-inclusive encoded response sizes, and available renderer heap. The report labels those byte observations as encoded bodies/headers rather than complete wire-transfer totals. Their JSON reports live under ignored `outputs/` paths so a local run does not become an unexplained repository claim.
+
+**Evidence:** automated browser checks prove that a sound-only session requests zero semantic model/WASM assets, the local preference drives repeat startup, semantic failure leaves the sound loop usable, and all observed application requests remain same-origin. The evaluator and both benchmark commands produce revisioned, machine-readable reports; the evaluator and sound benchmark also have check-only validation paths for CI, where timing would be meaningless. The research export records insertion, undo, pin, traversal, map/list, engine, and timing events without recording the draft or sending a network request.
+
+The first 118-label development run scored the current phonetic engine at `.951801` nDCG@3 and `.956988` nDCG@10, versus `.935200` and `.946271` for the documented suffix baseline. Reciprocal rank was `.92` versus `.90`, and the provisional top-three high-impact false-positive rate was `0` versus `.027778`. These grades were machine-assisted and have zero human reviewers. The nDCG@10 delta is only `.010717`, below the roadmap's `.03` held-out improvement gate, and this run has neither independent review nor confidence intervals. It verifies that the evaluator can expose a small difference; it is not evidence that the ranker has cleared the product gate.
+
+A fresh Chromium run against the v0.2.0 production export observed cold DOM, sound, meaning, and combined-result readiness at `657`, `2,371`, `13,379`, and `19,861 ms`. In the same browser context, a cached repeat observed `298`, `2,205`, `6,278`, and `9,898 ms`. The sound-only phase made zero semantic requests. Opting in transferred one `22,972,370`-byte ONNX body and `47,299,486` bytes of semantic model/runtime bodies in total; including the separately observed worker script puts the optional path at about `45.6 MiB`. All 24 cold and 17 repeat requests finished with no failure, while repeat semantic bodies came from cache. These are one-machine protocol observations, not portable latency or memory claims.
+
+A 30-pass, three-warm-up sound reference candidate on the 2-core/4-thread i7-7500U development laptop covered all available intent and pin-count strata. Engine indexing took `391.021 ms`; 180 exhaustive query samples observed a `1026.13 ms` median, `3303.119 ms` p95, and `9107.142 ms` maximum. Post-run process RSS was `814.813 MiB` above the pre-load sample, measured without forced garbage collection and therefore not a peak or retained-allocation claim. The run mechanically satisfies the benchmark manifest but materially misses the roadmap's search budgets; it makes indexed retrieval the next engine priority.
+
+This is infrastructure evidence, not recommendation validation. The evaluation set is machine-assisted and provisional, has zero human reviewers and no held-out split, and reranks a phonetic labelled candidate pool rather than measuring full-vocabulary retrieval. Bridge-labelled cases exercise intent-aware phonetic ranking; they do not establish semantic Bridge quality. Benchmark output remains machine- and protocol-specific. No structured target-writer session has yet answered whether the suggestions improve writing.
+
+**Decision:** mark M0 public-alpha guardrails as shipped and M1 evidence tooling as a shipped foundation, with human and held-out evidence still pending. Keep sound as the default usable instrument and semantics as an explicit local bandwidth choice. Keep the current graph as a stable star-shaped projection of one ranked neighbourhood; do not describe it as a global embedding graph, corpus cluster map, or candidate-to-candidate similarity graph.
+
+**Debt introduced:** the provisional set needs independent reviewers, more balanced intent/category coverage, and a separately sourced frozen split; Bridge needs a semantic-quality study rather than phonetic intent fixtures alone. The benchmark protocols need controlled reference-device runs before budgets are enforced. The manual research file still requires a consenting writer to start capture, inspect the file, and deliberately share it outside the app. Persisted drafts and semantic preference remain in origin-scoped localStorage, while active research capture uses per-tab sessionStorage; on GitHub Pages, `/RhymeGraph` is not a separate storage boundary from other `sjmakin.github.io` pages for either API. Automated accessibility checks do not replace screen-reader, reduced-motion, 320 px/400%, or physical-device testing.
+
 ## What this prototype proved
 
 1. A functional, explainable phonetic search can run over tens of thousands of entries entirely in-browser.
@@ -163,6 +190,8 @@ Those are the next questions. Adding more surface area before answering them wou
 | No guessed pronunciation for unknown words | Avoid confident but misleading phonetic claims | An evaluated, dialect-aware G2P path exists |
 | Authored phrase fixtures only | Proves mosaic alignment without dubious corpus rights | A redistributable phrase source is audited |
 | Stable relationship-led graph layout | Proves the interaction before graph mathematics | Graph v2 beats it in writer sessions |
+| Semantic stack loads on demand | Sound-first speed and an explicit roughly 46 MiB local bandwidth choice | Evidence supports a smaller model or another transparent policy |
+| Explicit, session-scoped local research export only | Supports formative sessions without passive telemetry, persistent capture, or draft capture | A separate, explicit submission study is approved |
 | Voice deferred | Typed recommendation quality is the prerequisite | The typed loop clears its validation gate |
 | GitHub Pages deployment | Simple static hosting fits the architecture | The owner chooses another publishing arrangement |
 
@@ -173,8 +202,7 @@ These have intentionally not been guessed:
 - the licence for RhymeGraph's own source code;
 - default handling of explicit vocabulary;
 - which dialect or regional pack should follow `en-US`;
-- whether semantic loading remains automatic or becomes an explicit bandwidth choice;
-- whether any opt-in research data should ever leave the browser;
+- whether any future, separately consented research submission path should exist; v0.2.0 only downloads a manual local file;
 - future publishing, sharing, custom-domain, or account behaviour.
 
 ## Format for future entries

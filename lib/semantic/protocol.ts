@@ -3,16 +3,6 @@ export interface SemanticScore {
   score: number;
 }
 
-export interface SemanticProgressEvent {
-  type: "progress";
-  requestId: number;
-  status: string;
-  file?: string;
-  progress?: number;
-  loaded?: number;
-  total?: number;
-}
-
 export interface SemanticReadyEvent {
   type: "ready";
   requestId: number;
@@ -32,7 +22,6 @@ export interface SemanticResultEvent {
 }
 
 export type SemanticWorkerEvent =
-  | SemanticProgressEvent
   | SemanticReadyEvent
   | SemanticErrorEvent
   | SemanticResultEvent;
@@ -56,7 +45,7 @@ export function isSemanticWorkerEvent(value: unknown): value is SemanticWorkerEv
   const candidate = value as Partial<SemanticWorkerEvent>;
   return (
     typeof candidate.type === "string" &&
-    ["progress", "ready", "error", "result"].includes(candidate.type) &&
+    ["ready", "error", "result"].includes(candidate.type) &&
     typeof candidate.requestId === "number"
   );
 }

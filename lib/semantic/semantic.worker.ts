@@ -5,7 +5,6 @@ import wasmBinaryUrl from "../../node_modules/onnxruntime-web/dist/ort-wasm-simd
 import { rankByCosine } from "./cosine";
 import { withBasePath } from "../public-path";
 import type {
-  SemanticProgressEvent,
   SemanticWorkerEvent,
   SemanticWorkerRequest,
 } from "./protocol";
@@ -15,14 +14,6 @@ const MODEL_ROOT = withBasePath("/models/");
 const EMBEDDING_DIMENSIONS = 384;
 
 type FeatureExtractor = Awaited<ReturnType<typeof createExtractor>>;
-
-interface ProgressUpdate {
-  status?: unknown;
-  file?: unknown;
-  progress?: unknown;
-  loaded?: unknown;
-  total?: unknown;
-}
 
 interface EmbeddingTensor {
   data: ArrayLike<number>;
@@ -36,7 +27,6 @@ interface WorkerScope {
 
 const workerScope = self as unknown as WorkerScope;
 let extractorPromise: Promise<FeatureExtractor> | undefined;
-let activeInitRequestId = 0;
 
 // Treat network isolation as a hard requirement rather than a preference.
 // If a local asset is absent, initialization fails instead of contacting Hub.
@@ -53,34 +43,15 @@ wasmBackend.wasmPaths = {
   wasm: wasmBinaryUrl,
 };
 
-function numberOrUndefined(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function emitProgress(update: ProgressUpdate): void {
-  const event: SemanticProgressEvent = {
-    type: "progress",
-    requestId: activeInitRequestId,
-    status: typeof update.status === "string" ? update.status : "loading",
-    file: typeof update.file === "string" ? update.file : undefined,
-    progress: numberOrUndefined(update.progress),
-    loaded: numberOrUndefined(update.loaded),
-    total: numberOrUndefined(update.total),
-  };
-  workerScope.postMessage(event);
-}
-
 async function createExtractor() {
   return pipeline("feature-extraction", MODEL_ID, {
     device: "wasm",
     dtype: "q8",
     local_files_only: true,
-    progress_callback: emitProgress,
   });
 }
 
-function getExtractor(requestId: number): Promise<FeatureExtractor> {
-  activeInitRequestId = requestId;
+function getExtractor(): Promise<FeatureExtractor> {
   extractorPromise ??= createExtractor().catch((error: unknown) => {
     // Permit an explicit retry after a transient local asset/runtime failure.
     extractorPromise = undefined;
@@ -111,7 +82,7 @@ function rowsFromTensor(tensor: EmbeddingTensor, rowCount: number): Float32Array
 }
 
 async function initialize(requestId: number): Promise<void> {
-  await getExtractor(requestId);
+  await getExtractor();
   workerScope.postMessage({ type: "ready", requestId, model: MODEL_ID });
 }
 
@@ -125,7 +96,7 @@ async function score(
     return;
   }
 
-  const extractor = await getExtractor(requestId);
+  const extractor = await getExtractor();
   const texts = [queryText, ...candidates];
   const output = (await extractor(texts, {
     pooling: "mean",

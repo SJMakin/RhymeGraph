@@ -13,7 +13,7 @@
 | Initial platform | Local-first web application |
 | Core promise | Find the next useful word by sound, meaning, and flow—not by spelling |
 | Runtime dependency policy | No proprietary dictionary or inference API required |
-| Last revised | 2026-08-03 |
+| Last revised | 2026-08-11 |
 
 ## 1. Executive decision
 
@@ -162,7 +162,7 @@ Every candidate supports:
 
 ### A local, semantic graph
 
-Render approximately 12–24 candidate nodes, the active centre, and at most five pinned anchors. Never render the full lexicon.
+Render approximately 12–24 candidate nodes, the active centre, and at most four pinned anchors (five anchors total). Never render the full lexicon.
 
 The layout must encode something understandable:
 
@@ -578,7 +578,7 @@ TTS initially serves pronunciation audition and dialect comparison. Ordinary TTS
 - One language: English.
 - One primary pronunciation pack.
 - One local project format.
-- At most five pinned sound anchors.
+- One active sound anchor plus at most four pinned anchors (five total).
 - At most 24 visible candidate nodes.
 - No server required for ordinary v0.1 use.
 

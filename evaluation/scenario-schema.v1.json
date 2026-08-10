@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sjmakin.github.io/RhymeGraph/evaluation/scenario-schema.v1.json",
+  "title": "RhymeGraph evaluation scenarios v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "datasetId",
+    "datasetVersion",
+    "split",
+    "heldOut",
+    "judgement",
+    "provenance",
+    "scenarios"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": "rhymegraph.evaluation-scenarios.v1" },
+    "datasetId": { "type": "string", "minLength": 1 },
+    "datasetVersion": { "type": "string", "minLength": 1 },
+    "split": { "enum": ["development", "held-out"] },
+    "heldOut": { "type": "boolean" },
+    "judgement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scale", "reviewerCount", "reviewType", "status"],
+      "properties": {
+        "scale": { "const": "0-unrelated_1-usable_2-keep-worthy" },
+        "reviewerCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of human reviewers; machine-assisted fixture generation does not count."
+        },
+        "reviewType": {
+          "enum": ["unreviewed-machine-assisted", "human-reviewed"],
+          "description": "Whether the candidate labels have received human review."
+        },
+        "status": { "enum": ["provisional-development", "double-reviewed-frozen"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "reviewType": { "const": "unreviewed-machine-assisted" } } },
+          "then": {
+            "properties": {
+              "reviewerCount": { "const": 0 },
+              "status": { "const": "provisional-development" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "reviewType": { "const": "human-reviewed" } } },
+          "then": { "properties": { "reviewerCount": { "minimum": 1 } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": "double-reviewed-frozen" } } },
+          "then": {
+            "properties": {
+              "reviewerCount": { "minimum": 2 },
+              "reviewType": { "const": "human-reviewed" }
+            }
+          }
+        }
+      ]
+    },
+    "provenance": { "type": "string", "minLength": 1 },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/scenario" }
+    }
+  },
+  "$defs": {
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "split",
+        "category",
+        "anchor",
+        "context",
+        "pins",
+        "intent",
+        "dialect",
+        "expectedAnchorCoverage",
+        "judgements"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^(dev|held)-[a-z0-9-]+$" },
+        "split": { "enum": ["development", "held-out"] },
+        "category": {
+          "enum": [
+            "full-rhyme",
+            "assonance",
+            "consonance",
+            "slant",
+            "multi-syllabic",
+            "mosaic",
+            "multi-pin",
+            "slang",
+            "ambiguous-pronunciation",
+            "pivot",
+            "unknown-word"
+          ]
+        },
+        "anchor": { "type": "string", "minLength": 1 },
+        "context": { "type": ["string", "null"] },
+        "pins": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "intent": { "enum": ["continue", "bridge", "pivot"] },
+        "dialect": { "type": "string", "minLength": 1 },
+        "expectedAnchorCoverage": { "type": "boolean" },
+        "notes": { "type": "string" },
+        "judgements": {
+          "type": "array",
+          "minItems": 3,
+          "contains": {
+            "type": "object",
+            "required": ["grade"],
+            "properties": { "grade": { "minimum": 1 } }
+          },
+          "items": { "$ref": "#/$defs/judgement" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "intent": { "const": "bridge" } } },
+          "then": { "properties": { "context": { "type": "string", "minLength": 1 } } }
+        }
+      ]
+    },
+    "judgement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate", "grade", "relationships", "rationale"],
+      "properties": {
+        "candidate": { "type": "string", "minLength": 1 },
+        "grade": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "relationships": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "full-rhyme",
+              "assonance",
+              "consonance",
+              "slant",
+              "multi-syllabic",
+              "mosaic",
+              "sound-pivot"
+            ]
+          }
+        },
+        "rationale": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

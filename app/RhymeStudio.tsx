@@ -6,10 +6,12 @@ import {
   ArrowDownRight,
   ArrowRight,
   BookOpen,
+  BrainCircuit,
   Check,
   ChevronDown,
   CircleHelp,
   CornerDownLeft,
+  Download,
   Focus,
   Gauge,
   History,
@@ -45,12 +47,20 @@ import {
   type RelationshipKind,
 } from "../lib/demo-data";
 import type { PhoneticSearchClient, SearchCandidate } from "../lib/phonetic-search";
+import {
+  createLocalResearchSession,
+  downloadResearchSession,
+  resumeLocalResearchSession,
+  type LocalResearchSession,
+  type ResearchEventInput,
+} from "../lib/research/session";
 import type { SemanticClient } from "../lib/semantic";
 
 type Intent = "continue" | "bridge" | "pivot";
 type EngineStatus = "loading" | "ready" | "error";
 type SemanticStatus = "idle" | "loading" | "ready" | "error";
 type MobilePanel = "write" | "explore";
+type SemanticTrigger = NonNullable<Extract<ResearchEventInput, { type: "engine" }>["trigger"]>;
 
 interface AnchorRange {
   start: number;
@@ -58,6 +68,13 @@ interface AnchorRange {
 }
 
 const STORAGE_KEY = "rhymegraph.project.v1";
+const SEMANTIC_PREFERENCE_KEY = "rhymegraph.semantic.enabled.v1";
+const SEMANTIC_DOWNLOAD_LABEL = "about 46 MiB";
+const MAX_DRAFT_LENGTH = 100_000;
+const MAX_TITLE_LENGTH = 120;
+const MAX_PROJECT_TOKEN_LENGTH = 96;
+const MAX_PIN_COUNT = 4;
+const MAX_BREADCRUMB_COUNT = 8;
 const DEMO_BY_WORD = new Map(DEMO_CANDIDATES.map((candidate) => [candidate.word, candidate]));
 
 const RELATION_ACCENT: Record<RelationshipKind, string> = {
@@ -133,6 +150,72 @@ function wordAtCursor(text: string, cursor: number) {
   while (start > 0 && isWord(text[start - 1])) start -= 1;
   while (end < text.length && isWord(text[end])) end += 1;
   return { text: text.slice(start, end).trim(), start, end };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function boundedProjectString(value: unknown, maxLength: number, trim = false) {
+  if (typeof value !== "string") return undefined;
+  const bounded = value.slice(0, maxLength);
+  return trim ? bounded.replace(/\s+/g, " ").trim() : bounded;
+}
+
+function boundedProjectList(value: unknown, maxItems: number) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(
+    value
+      .slice(0, 64)
+      .flatMap((item) => {
+        const bounded = boundedProjectString(item, MAX_PROJECT_TOKEN_LENGTH, true);
+        return bounded ? [bounded] : [];
+      }),
+  )].slice(0, maxItems);
+}
+
+function restoreProject(value: unknown) {
+  if (!isRecord(value)) return null;
+  const draft = boundedProjectString(value.draft, MAX_DRAFT_LENGTH) ?? INITIAL_DRAFT;
+  const title = boundedProjectString(value.title, MAX_TITLE_LENGTH) ?? "untitled verse 03";
+  const pins = boundedProjectList(value.pins, MAX_PIN_COUNT);
+  const storedAnchor = boundedProjectString(value.anchor, MAX_PROJECT_TOKEN_LENGTH, true) ?? "";
+  const storedRange = value.anchorRange;
+  let range: AnchorRange | null = null;
+  if (isRecord(storedRange)) {
+    const { start, end } = storedRange;
+    if (
+      typeof start === "number" &&
+      typeof end === "number" &&
+      Number.isSafeInteger(start) &&
+      Number.isSafeInteger(end) &&
+      start >= 0 &&
+      end > start &&
+      end <= draft.length &&
+      storedAnchor &&
+      draft.slice(start, end).trim().toLocaleLowerCase("en") === storedAnchor.toLocaleLowerCase("en")
+    ) {
+      range = { start, end };
+    }
+  }
+  const fallback = wordAtCursor(draft, draft.length);
+  const fallbackAnchor = boundedProjectString(fallback.text, MAX_PROJECT_TOKEN_LENGTH, true) ?? "";
+  const anchor = range ? storedAnchor : fallbackAnchor;
+  const anchorRange = range ?? {
+    start: fallback.start,
+    end: Math.min(draft.length, fallback.start + fallbackAnchor.length),
+  };
+  const restoredBreadcrumbs = boundedProjectList(value.breadcrumbs, MAX_BREADCRUMB_COUNT);
+  return {
+    draft,
+    title,
+    pins,
+    anchor,
+    anchorRange,
+    breadcrumbs: restoredBreadcrumbs.length > 0
+      ? restoredBreadcrumbs
+      : anchor ? [anchor] : [],
+  };
 }
 
 function getActiveLine(text: string, range: AnchorRange) {
@@ -213,7 +296,7 @@ export function RhymeStudio() {
   const [lexiconCount, setLexiconCount] = useState(0);
   const [searching, setSearching] = useState(false);
   const [semanticStatus, setSemanticStatus] = useState<SemanticStatus>("idle");
-  const [semanticProgress, setSemanticProgress] = useState(0);
+  const [semanticEnabled, setSemanticEnabled] = useState(false);
   const [semanticQuery, setSemanticQuery] = useState(
     getActiveLine(INITIAL_DRAFT, {
       start: initialAnchorStart,
@@ -224,14 +307,41 @@ export function RhymeStudio() {
   const [viewMode, setViewMode] = useState<"map" | "list">("map");
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("write");
   const [toast, setToast] = useState<string | null>(null);
-  const [undoState, setUndoState] = useState<{ draft: string; range: AnchorRange; anchor: string } | null>(null);
+  const [undoState, setUndoState] = useState<{
+    draft: string;
+    range: AnchorRange;
+    anchor: string;
+    inserted: string;
+    relation: RelationshipKind;
+    rank: number;
+    intent: Intent;
+  } | null>(null);
   const [voiceNoteOpen, setVoiceNoteOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [researchActive, setResearchActive] = useState(false);
   const [hydrated, setHydrated] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const settingsButtonRef = useRef<HTMLButtonElement>(null);
+  const settingsCloseButtonRef = useRef<HTMLButtonElement>(null);
   const phoneticRef = useRef<PhoneticSearchClient | null>(null);
   const semanticRef = useRef<SemanticClient | null>(null);
+  const semanticUnsubscribeRef = useRef<() => void>(() => {});
+  const semanticAttemptRef = useRef<{ revision: number; startedAt: number; settled: boolean } | null>(null);
+  const semanticLifecycleRevision = useRef(0);
+  const pendingSemanticTrigger = useRef<SemanticTrigger>("preference");
+  const researchRef = useRef<LocalResearchSession | null>(null);
+  const soundStartedAt = useRef(0);
   const searchRevision = useRef(0);
+  const semanticRerankInputRef = useRef<{
+    source: CandidateView[];
+    query: string;
+    status: SemanticStatus;
+  } | null>(null);
+
+  const recordResearch = useCallback((event: ResearchEventInput) => {
+    researchRef.current?.record(event);
+  }, []);
 
   const selected = useMemo(
     () => candidates.find((candidate) => candidate.id === selectedId) ?? candidates[0],
@@ -251,51 +361,47 @@ export function RhymeStudio() {
   }, [candidates, syllableFilter, partOfSpeech]);
 
   useEffect(() => {
+    const resumeTimer = window.setTimeout(() => {
+      try {
+        const existing = resumeLocalResearchSession();
+        researchRef.current = existing;
+        setResearchActive(Boolean(existing));
+      } catch {
+        // Research remains off when per-tab storage is unavailable.
+      }
+    }, 0);
+    return () => {
+      window.clearTimeout(resumeTimer);
+      researchRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
     const hydrationTimer = window.setTimeout(() => {
       try {
         const saved = window.localStorage.getItem(STORAGE_KEY);
         if (saved) {
-          const parsed = JSON.parse(saved) as {
-            draft?: string;
-            title?: string;
-            pins?: string[];
-            anchor?: string;
-            anchorRange?: AnchorRange;
-            breadcrumbs?: string[];
-          };
-          const restoredDraft = typeof parsed.draft === "string" ? parsed.draft : INITIAL_DRAFT;
-          if (typeof parsed.draft === "string") setDraft(restoredDraft);
-          if (typeof parsed.title === "string") setProjectTitle(parsed.title);
-          if (Array.isArray(parsed.pins)) setPins(parsed.pins.slice(0, 5));
-
-          const restoredRange = parsed.anchorRange;
-          const restoredAnchor = typeof parsed.anchor === "string" ? parsed.anchor.trim() : "";
-          const rangeIsValid = Boolean(
-            restoredAnchor &&
-            restoredRange &&
-            Number.isInteger(restoredRange.start) &&
-            Number.isInteger(restoredRange.end) &&
-            restoredRange.start >= 0 &&
-            restoredRange.end <= restoredDraft.length &&
-            restoredRange.start < restoredRange.end &&
-            restoredDraft.slice(restoredRange.start, restoredRange.end).trim().toLowerCase() ===
-              restoredAnchor.toLowerCase(),
-          );
-          const fallback = wordAtCursor(restoredDraft, restoredDraft.length);
-          const nextAnchor = rangeIsValid ? restoredAnchor : fallback.text;
-          const nextRange: AnchorRange = rangeIsValid && restoredRange
-            ? restoredRange
-            : { start: fallback.start, end: fallback.end };
-          setAnchor(nextAnchor);
-          setAnchorRange(nextRange);
-          setBreadcrumbs(
-            Array.isArray(parsed.breadcrumbs) && parsed.breadcrumbs.length > 0
-              ? parsed.breadcrumbs.filter((value): value is string => typeof value === "string").slice(-8)
-              : nextAnchor ? [nextAnchor] : [],
-          );
+          const restored = restoreProject(JSON.parse(saved));
+          if (restored) {
+            setDraft(restored.draft);
+            setProjectTitle(restored.title);
+            setPins(restored.pins);
+            setAnchor(restored.anchor);
+            setAnchorRange(restored.anchorRange);
+            setBreadcrumbs(restored.breadcrumbs);
+          }
         }
       } catch {
-        setToast("Draft storage is unavailable on this device");
+        setToast("Saved draft data was ignored because it is unavailable or malformed");
+      }
+      try {
+        const semanticPreference = window.localStorage.getItem(SEMANTIC_PREFERENCE_KEY);
+        if (semanticPreference === "true") {
+          pendingSemanticTrigger.current = "preference";
+          setSemanticEnabled(true);
+        }
+      } catch {
+        // A missing preference must never opt into the optional meaning engine.
       } finally {
         setHydrated(true);
       }
@@ -325,13 +431,10 @@ export function RhymeStudio() {
   useEffect(() => {
     let cancelled = false;
     let unsubscribePhonetic = () => {};
-    let unsubscribeSemantic = () => {};
-    let semanticTimer = 0;
+    soundStartedAt.current = performance.now();
+    recordResearch({ type: "engine", engine: "sound", phase: "started" });
 
-    void Promise.all([
-      import("../lib/phonetic-search"),
-      import("../lib/semantic"),
-    ]).then(([phoneticModule, semanticModule]) => {
+    void import("../lib/phonetic-search").then((phoneticModule) => {
       if (cancelled) return;
       const phonetic = phoneticModule.createPhoneticSearchClient();
       phoneticRef.current = phonetic;
@@ -344,49 +447,145 @@ export function RhymeStudio() {
           setLexiconCount(event.words);
           setEngineProgress(100);
           setStatusMessage("Sound map ready");
+          recordResearch({
+            type: "engine",
+            engine: "sound",
+            phase: "ready",
+            durationMs: Math.round(performance.now() - soundStartedAt.current),
+            itemCount: event.words,
+          });
         } else if (event.type === "error") {
           setEngineStatus("error");
           setStatusMessage("Using the studio demo pack");
+          recordResearch({
+            type: "engine",
+            engine: "sound",
+            phase: "error",
+            durationMs: Math.round(performance.now() - soundStartedAt.current),
+          });
         }
       });
       void phonetic.init().catch(() => setEngineStatus("error"));
-
-      const semantic = semanticModule.createSemanticClient();
-      semanticRef.current = semantic;
-      unsubscribeSemantic = semantic.subscribe((event) => {
-        if (event.type === "progress") {
-          setSemanticStatus("loading");
-          const explicit = event.progress ??
-            (event.total && event.loaded ? (event.loaded / event.total) * 100 : undefined);
-          if (explicit !== undefined) setSemanticProgress(clamp(explicit));
-        } else if (event.type === "ready") {
-          setSemanticStatus("ready");
-          setSemanticProgress(100);
-        } else if (event.type === "error") {
-          setSemanticStatus("error");
-        }
-      });
-
-      semanticTimer = window.setTimeout(() => {
-        setSemanticStatus("loading");
-        void semantic.init().catch(() => setSemanticStatus("error"));
-      }, 900);
     }).catch(() => {
       setEngineStatus("error");
-      setSemanticStatus("error");
+      recordResearch({ type: "engine", engine: "sound", phase: "error" });
     });
 
     return () => {
       cancelled = true;
-      window.clearTimeout(semanticTimer);
       unsubscribePhonetic();
-      unsubscribeSemantic();
       phoneticRef.current?.dispose();
-      semanticRef.current?.dispose();
       phoneticRef.current = null;
-      semanticRef.current = null;
     };
+  }, [recordResearch]);
+
+  const releaseSemantic = useCallback(() => {
+    semanticLifecycleRevision.current += 1;
+    if (semanticAttemptRef.current) semanticAttemptRef.current.settled = true;
+    semanticUnsubscribeRef.current();
+    semanticUnsubscribeRef.current = () => {};
+    semanticRef.current?.dispose();
+    semanticRef.current = null;
+    semanticAttemptRef.current = null;
   }, []);
+
+  const startSemantic = useCallback(async (trigger: SemanticTrigger) => {
+    if (semanticRef.current || semanticStatus === "loading" || semanticStatus === "ready") return;
+    const revision = ++semanticLifecycleRevision.current;
+    const startedAt = performance.now();
+    semanticAttemptRef.current = { revision, startedAt, settled: false };
+    setSemanticStatus("loading");
+    setStatusMessage(`Loading meaning model locally · ${SEMANTIC_DOWNLOAD_LABEL}`);
+    recordResearch({ type: "engine", engine: "meaning", phase: "started", trigger });
+
+    const fail = () => {
+      if (revision !== semanticLifecycleRevision.current) return;
+      const attempt = semanticAttemptRef.current;
+      if (attempt && !attempt.settled) {
+        attempt.settled = true;
+        recordResearch({
+          type: "engine",
+          engine: "meaning",
+          phase: "error",
+          trigger,
+          durationMs: Math.round(performance.now() - attempt.startedAt),
+        });
+      }
+      setSemanticStatus("error");
+      setStatusMessage("Meaning unavailable · sound search is still ready");
+    };
+
+    try {
+      const semanticModule = await import("../lib/semantic");
+      if (revision !== semanticLifecycleRevision.current) return;
+      const semantic = semanticModule.createSemanticClient();
+      semanticRef.current = semantic;
+      semanticUnsubscribeRef.current = semantic.subscribe((event) => {
+        if (revision !== semanticLifecycleRevision.current) return;
+        if (event.type === "ready") {
+          const attempt = semanticAttemptRef.current;
+          if (attempt && !attempt.settled) {
+            attempt.settled = true;
+            recordResearch({
+              type: "engine",
+              engine: "meaning",
+              phase: "ready",
+              trigger,
+              durationMs: Math.round(performance.now() - attempt.startedAt),
+            });
+          }
+          setSemanticStatus("ready");
+          setStatusMessage("Meaning ready · everything stays on this device");
+        } else if (event.type === "error") {
+          fail();
+        }
+      });
+      await semantic.init();
+    } catch {
+      fail();
+    }
+  }, [recordResearch, semanticStatus]);
+
+  const enableSemantic = useCallback((trigger: SemanticTrigger) => {
+    pendingSemanticTrigger.current = trigger;
+    setSemanticEnabled(true);
+    try {
+      window.localStorage.setItem(SEMANTIC_PREFERENCE_KEY, "true");
+    } catch {
+      // The in-memory preference still works for this session.
+    }
+  }, []);
+
+  const disableSemantic = useCallback(() => {
+    releaseSemantic();
+    setSemanticEnabled(false);
+    setSemanticStatus("idle");
+    setCandidates(baseCandidates.slice(0, 30));
+    setStatusMessage("Meaning off · sound search stays ready");
+    try {
+      window.localStorage.setItem(SEMANTIC_PREFERENCE_KEY, "false");
+    } catch {
+      // The in-memory preference still works for this session.
+    }
+    recordResearch({ type: "engine", engine: "meaning", phase: "disabled" });
+  }, [baseCandidates, recordResearch, releaseSemantic]);
+
+  const retrySemantic = useCallback(() => {
+    releaseSemantic();
+    setSemanticStatus("idle");
+    pendingSemanticTrigger.current = "retry";
+    setSemanticEnabled(true);
+    void startSemantic("retry");
+  }, [releaseSemantic, startSemantic]);
+
+  useEffect(() => {
+    if (!hydrated || !semanticEnabled || semanticStatus !== "idle") return;
+    void startSemantic(pendingSemanticTrigger.current);
+  }, [hydrated, semanticEnabled, semanticStatus, startSemantic]);
+
+  useEffect(() => {
+    return () => releaseSemantic();
+  }, [releaseSemantic]);
 
   const applySemanticRerank = useCallback(
     async (query: string, source: CandidateView[], revision: number) => {
@@ -394,7 +593,7 @@ export function RhymeStudio() {
       if (!semantic || semanticStatus !== "ready" || source.length === 0 || !query.trim()) return;
       try {
         const rawScores = await semantic.score(query, source.map((candidate) => candidate.word));
-        if (revision !== searchRevision.current) return;
+        if (revision !== searchRevision.current || semanticRef.current !== semantic) return;
         const semanticScores = normalizeSemanticScores(rawScores);
         const soundWeight = (100 - meaningBalance) / 100;
         const meaningWeight = meaningBalance / 100;
@@ -419,12 +618,16 @@ export function RhymeStudio() {
         setCandidates(reranked);
         setStatusMessage("Sound and meaning combined on this device");
       } catch (error) {
+        if (revision !== searchRevision.current || semanticRef.current !== semantic) return;
         if (!(error instanceof Error && error.name === "SemanticRequestSupersededError")) {
           setSemanticStatus("error");
+          setCandidates(source.slice(0, 30));
+          setStatusMessage("Meaning paused · sound results restored");
+          recordResearch({ type: "engine", engine: "meaning", phase: "error" });
         }
       }
     },
-    [intent, meaningBalance, semanticStatus],
+    [intent, meaningBalance, recordResearch, semanticStatus],
   );
 
   useEffect(() => {
@@ -451,6 +654,7 @@ export function RhymeStudio() {
       setSearching(true);
       setStatusMessage("Tracing the next neighbourhood");
       const minPhonetic = clamp(.68 - adventurousness * .0044, .24, .68);
+      const searchStartedAt = performance.now();
       void phonetic
         .search({
           anchors,
@@ -474,6 +678,13 @@ export function RhymeStudio() {
             return;
           }
           const mapped = results.map(fromSearchCandidate);
+          recordResearch({
+            type: "neighbourhood",
+            intent,
+            anchorCount: anchors.length,
+            resultCount: mapped.length,
+            durationMs: Math.round(performance.now() - searchStartedAt),
+          });
           setBaseCandidates(mapped);
           setCandidates(mapped.slice(0, 30));
           setSemanticQuery(query);
@@ -494,12 +705,27 @@ export function RhymeStudio() {
     }, 180);
 
     return () => window.clearTimeout(timer);
-  }, [anchor, pins, intent, concept, adventurousness, draft, anchorRange, breadcrumbs, engineStatus]);
+  }, [anchor, pins, intent, concept, adventurousness, draft, anchorRange, breadcrumbs, engineStatus, recordResearch]);
 
   useEffect(() => {
     if (semanticStatus !== "ready" || baseCandidates.length === 0) return;
+    const previous = semanticRerankInputRef.current;
+    const onlyMixChanged = Boolean(
+      previous &&
+      previous.source === baseCandidates &&
+      previous.query === semanticQuery &&
+      previous.status === semanticStatus,
+    );
+    semanticRerankInputRef.current = {
+      source: baseCandidates,
+      query: semanticQuery,
+      status: semanticStatus,
+    };
     const revision = searchRevision.current;
-    void applySemanticRerank(semanticQuery, baseCandidates, revision);
+    const timer = window.setTimeout(() => {
+      void applySemanticRerank(semanticQuery, baseCandidates, revision);
+    }, onlyMixChanged ? 240 : 0);
+    return () => window.clearTimeout(timer);
   }, [semanticStatus, baseCandidates, semanticQuery, applySemanticRerank]);
 
   useEffect(() => {
@@ -533,25 +759,44 @@ export function RhymeStudio() {
     setBreadcrumbs([nextAnchor]);
     setPins([]);
     setMobilePanel("explore");
-  }, [draft]);
+    recordResearch({ type: "anchor", anchor: nextAnchor, source: "draft" });
+  }, [draft, recordResearch]);
 
   const togglePin = useCallback((word: string) => {
-    setPins((current) => {
-      if (current.includes(word)) return current.filter((item) => item !== word);
-      if (current.length >= 5) {
-        setToast("A rhyme family can hold up to five anchors");
-        return current;
-      }
-      return [...current, word];
+    const wasPinned = pins.includes(word);
+    if (!wasPinned && pins.length >= MAX_PIN_COUNT) {
+      setToast("A rhyme family can hold five anchors total");
+      return;
+    }
+    const candidate = candidates.find((item) => item.word === word);
+    recordResearch({
+      type: "candidate",
+      action: wasPinned ? "unpinned" : "pinned",
+      candidate: word,
+      anchor,
+      intent,
+      rank: candidate ? candidates.indexOf(candidate) + 1 : undefined,
+      relation: candidate?.relation,
     });
-  }, []);
+    setPins(wasPinned ? pins.filter((item) => item !== word) : [...pins, word]);
+  }, [anchor, candidates, intent, pins, recordResearch]);
 
   const expandCandidate = useCallback((candidate: CandidateView) => {
+    recordResearch({
+      type: "candidate",
+      action: "expanded",
+      candidate: candidate.word,
+      anchor,
+      intent,
+      rank: candidates.indexOf(candidate) + 1,
+      relation: candidate.relation,
+    });
+    recordResearch({ type: "anchor", anchor: candidate.word, source: "candidate" });
     setAnchor(candidate.word);
     setBreadcrumbs((current) => [...current, candidate.word].slice(-6));
     setSelectedId(candidate.id);
     setToast(`Opened the ${candidate.word} neighbourhood`);
-  }, []);
+  }, [anchor, candidates, intent, recordResearch]);
 
   const insertCandidate = useCallback((candidate: CandidateView) => {
     const before = draft;
@@ -572,26 +817,147 @@ export function RhymeStudio() {
       : candidate.word;
     const nextDraft = `${draft.slice(0, range.start)}${insertion}${draft.slice(range.end)}`;
     const nextRange = { start: range.start, end: range.start + insertion.length };
-    setUndoState({ draft: before, range, anchor });
+    setUndoState({
+      draft: before,
+      range,
+      anchor,
+      inserted: candidate.word,
+      relation: candidate.relation,
+      rank: candidates.indexOf(candidate) + 1,
+      intent,
+    });
     setDraft(nextDraft);
     setAnchor(candidate.word);
     setAnchorRange(nextRange);
     setBreadcrumbs((current) => [...current, candidate.word].slice(-6));
     setToast(`Inserted “${candidate.word}”`);
+    recordResearch({
+      type: "candidate",
+      action: "inserted",
+      candidate: candidate.word,
+      anchor,
+      intent,
+      rank: candidates.indexOf(candidate) + 1,
+      relation: candidate.relation,
+    });
     window.setTimeout(() => {
       textareaRef.current?.focus();
       textareaRef.current?.setSelectionRange(nextRange.start, nextRange.end);
     }, 0);
-  }, [anchor, anchorRange, draft]);
+  }, [anchor, anchorRange, candidates, draft, intent, recordResearch]);
 
   const undoInsert = useCallback(() => {
     if (!undoState) return;
     setDraft(undoState.draft);
     setAnchor(undoState.anchor);
     setAnchorRange(undoState.range);
+    recordResearch({
+      type: "candidate",
+      action: "undone",
+      candidate: undoState.inserted,
+      anchor: undoState.anchor,
+      intent: undoState.intent,
+      rank: undoState.rank,
+      relation: undoState.relation,
+    });
     setUndoState(null);
     setToast("Insertion undone");
-  }, [undoState]);
+  }, [recordResearch, undoState]);
+
+  const selectCandidate = useCallback((candidate: CandidateView) => {
+    setSelectedId(candidate.id);
+    recordResearch({
+      type: "candidate",
+      action: "selected",
+      candidate: candidate.word,
+      anchor,
+      intent,
+      rank: candidates.indexOf(candidate) + 1,
+      relation: candidate.relation,
+    });
+  }, [anchor, candidates, intent, recordResearch]);
+
+  const chooseIntent = useCallback((nextIntent: Intent) => {
+    setIntent(nextIntent);
+    recordResearch({ type: "intent", intent: nextIntent });
+    if (nextIntent === "bridge") enableSemantic("bridge");
+  }, [enableSemantic, recordResearch]);
+
+  const chooseView = useCallback((nextView: "map" | "list") => {
+    setViewMode(nextView);
+    recordResearch({ type: "view", view: nextView });
+  }, [recordResearch]);
+
+  const updateMeaningBalance = useCallback((value: number) => {
+    setMeaningBalance(value);
+    if (value > 0 && !semanticEnabled) enableSemantic("mix");
+  }, [enableSemantic, semanticEnabled]);
+
+  const startResearch = useCallback(() => {
+    try {
+      const session = createLocalResearchSession();
+      researchRef.current = session;
+      setResearchActive(true);
+      setToast("Local research session started · activity is now recorded in this tab");
+    } catch {
+      setToast("Research sessions are unavailable in this browser");
+    }
+  }, []);
+
+  const exportResearch = useCallback(() => {
+    try {
+      const session = researchRef.current;
+      if (!session) {
+        setToast("Start a local research session before exporting");
+        return;
+      }
+      session.record({ type: "export" });
+      const snapshot = session.snapshot({
+        anchor,
+        pinnedAnchors: pins,
+        concept: intent === "bridge" && concept.trim() ? concept : undefined,
+        intent,
+        meaningMix: meaningBalance,
+        adventurousness,
+        meaningState: semanticStatus,
+      });
+      downloadResearchSession(snapshot);
+      setToast("Research session exported · no draft text included");
+    } catch {
+      setToast("Research export is unavailable in this browser");
+    }
+  }, [adventurousness, anchor, concept, intent, meaningBalance, pins, semanticStatus]);
+
+  const stopResearch = useCallback(() => {
+    let cleared = true;
+    try {
+      researchRef.current?.clear();
+    } catch {
+      cleared = false;
+    }
+    researchRef.current = null;
+    setResearchActive(false);
+    setToast(cleared
+      ? "Research session cleared and stopped"
+      : "Research stopped, but stored session data could not be confirmed cleared");
+  }, []);
+
+  const closeSettings = useCallback(() => {
+    setSettingsOpen(false);
+    window.requestAnimationFrame(() => settingsButtonRef.current?.focus());
+  }, []);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    window.requestAnimationFrame(() => settingsCloseButtonRef.current?.focus());
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeSettings();
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [closeSettings, settingsOpen]);
 
   useEffect(() => {
     const handleKeyboard = (event: KeyboardEvent) => {
@@ -637,7 +1003,7 @@ export function RhymeStudio() {
 
         <label className="project-name">
           <span className="sr-only">Project name</span>
-          <input value={projectTitle} onChange={(event) => setProjectTitle(event.target.value)} />
+          <input maxLength={MAX_TITLE_LENGTH} value={projectTitle} onChange={(event) => setProjectTitle(event.target.value)} />
         </label>
 
         <div className="topbar-actions">
@@ -649,11 +1015,28 @@ export function RhymeStudio() {
             className="icon-button perform-button"
             type="button"
             aria-label="Open performed cadence preview"
-            onClick={() => setVoiceNoteOpen((open) => !open)}
+            onClick={() => {
+              setVoiceNoteOpen((open) => !open);
+              setSettingsOpen(false);
+            }}
           >
             <Mic2 size={17} />
           </button>
-          <button className="icon-button" type="button" aria-label="Settings">
+          <button
+            ref={settingsButtonRef}
+            className="icon-button"
+            type="button"
+            aria-label="Open local settings"
+            aria-expanded={settingsOpen}
+            onClick={() => {
+              if (settingsOpen) {
+                closeSettings();
+                return;
+              }
+              setSettingsOpen(true);
+              setVoiceNoteOpen(false);
+            }}
+          >
             <Settings2 size={17} />
           </button>
         </div>
@@ -670,11 +1053,96 @@ export function RhymeStudio() {
         </aside>
       )}
 
-      <div className="mobile-tabs" role="tablist" aria-label="Workspace view">
-        <button className={mobilePanel === "write" ? "active" : ""} onClick={() => setMobilePanel("write")} role="tab">
+      {settingsOpen && (
+        <aside className="local-settings" aria-label="Local intelligence and research settings">
+          <header>
+            <div>
+              <span>LOCAL SETTINGS</span>
+              <strong>Private by construction</strong>
+            </div>
+            <button ref={settingsCloseButtonRef} type="button" aria-label="Close local settings" onClick={closeSettings}><X size={15} /></button>
+          </header>
+
+          <section className="local-settings-card" data-semantic-state={semanticStatus}>
+            <div className="settings-card-heading">
+              <span className="settings-card-icon"><BrainCircuit size={16} /></span>
+              <div>
+                <strong>Meaning model</strong>
+                <span>{SEMANTIC_DOWNLOAD_LABEL} once · runs on this device</span>
+              </div>
+            </div>
+            {semanticStatus === "loading" && (
+              <div
+                className="semantic-progress"
+                role="progressbar"
+                aria-label="Meaning model loading"
+                aria-valuetext={`Loading locally · ${SEMANTIC_DOWNLOAD_LABEL}`}
+              >
+                <span />
+              </div>
+            )}
+            <p>
+              {semanticStatus === "ready"
+                ? "Meaning is active. Sound remains available if you turn it off."
+                : semanticStatus === "loading"
+                  ? `Loading locally · ${SEMANTIC_DOWNLOAD_LABEL}`
+                  : semanticStatus === "error"
+                    ? "Meaning could not start. Sound search is unaffected."
+                    : "Optional. It loads only when you ask for meaning or choose Bridge."}
+            </p>
+            <button
+              className="settings-card-action"
+              type="button"
+              aria-label={semanticStatus === "idle" ? "Load meaning model" : semanticStatus === "error" ? "Reload meaning model" : "Turn off meaning model"}
+              onClick={semanticStatus === "idle" ? () => enableSemantic("control") : semanticStatus === "error" ? retrySemantic : disableSemantic}
+            >
+              {semanticStatus === "idle" ? `Enable · ${SEMANTIC_DOWNLOAD_LABEL}` : semanticStatus === "error" ? "Try again" : semanticStatus === "loading" ? "Cancel download" : "Use sound only"}
+            </button>
+            {semanticStatus === "error" && (
+              <button className="settings-card-action" type="button" aria-label="Turn off failed meaning model" onClick={disableSemantic}>
+                Use sound only
+              </button>
+            )}
+          </section>
+
+          <section className="local-settings-card research-card">
+            <div className="settings-card-heading">
+              <span className="settings-card-icon research-icon"><Download size={16} /></span>
+              <div>
+                <strong>Research session</strong>
+                <span>{researchActive ? "Recording in this tab" : "Off until you start it"}</span>
+              </div>
+            </div>
+            <p>
+              {researchActive
+                ? "Recording anchors, concepts, candidate actions, settings, and timings locally in this tab. Your full draft and project title are excluded. Nothing is uploaded."
+                : "Start only if you want to record anchors, concepts, candidate actions, settings, and timings locally in this tab. Your full draft and project title are excluded. Nothing is uploaded."}
+            </p>
+            {researchActive ? (
+              <div className="research-actions">
+                <button className="settings-card-action" type="button" aria-label="Export research session" onClick={exportResearch}>
+                  <Download size={13} /> Export research session
+                </button>
+                <button className="settings-card-action research-stop" type="button" onClick={stopResearch}>
+                  Clear &amp; stop
+                </button>
+              </div>
+            ) : (
+              <button className="settings-card-action" type="button" onClick={startResearch}>
+                Start local research session
+              </button>
+            )}
+          </section>
+
+          <p className="settings-privacy"><span className="local-dot" /> No remote analytics or account. Research session data is never uploaded.</p>
+        </aside>
+      )}
+
+      <div className="mobile-tabs" role="group" aria-label="Workspace view">
+        <button type="button" className={mobilePanel === "write" ? "active" : ""} aria-pressed={mobilePanel === "write"} onClick={() => setMobilePanel("write")}>
           <BookOpen size={16} /> Write
         </button>
-        <button className={mobilePanel === "explore" ? "active" : ""} onClick={() => setMobilePanel("explore")} role="tab">
+        <button type="button" className={mobilePanel === "explore" ? "active" : ""} aria-pressed={mobilePanel === "explore"} onClick={() => setMobilePanel("explore")}>
           <Network size={16} /> Explore
         </button>
       </div>
@@ -704,6 +1172,7 @@ export function RhymeStudio() {
             </div>
             <textarea
               ref={textareaRef}
+              maxLength={MAX_DRAFT_LENGTH}
               value={draft}
               onChange={(event) => {
                 const nextDraft = event.target.value;
@@ -742,7 +1211,7 @@ export function RhymeStudio() {
                   type="button"
                   role="tab"
                   aria-selected={intent === item}
-                  onClick={() => setIntent(item)}
+                  onClick={() => chooseIntent(item)}
                 >
                   {item === "continue" ? <CornerDownLeft size={14} /> : item === "bridge" ? <ArrowRight size={14} /> : <ArrowDownRight size={14} />}
                   {item[0].toUpperCase() + item.slice(1)}
@@ -750,8 +1219,8 @@ export function RhymeStudio() {
               ))}
             </div>
             <div className="view-switch" aria-label="Result view">
-              <button className={viewMode === "map" ? "active" : ""} onClick={() => setViewMode("map")} aria-label="Map view"><MapIcon size={15} /></button>
-              <button className={viewMode === "list" ? "active" : ""} onClick={() => setViewMode("list")} aria-label="List view"><List size={15} /></button>
+              <button type="button" className={viewMode === "map" ? "active" : ""} aria-pressed={viewMode === "map"} onClick={() => chooseView("map")} aria-label="Map view"><MapIcon size={15} /></button>
+              <button type="button" className={viewMode === "list" ? "active" : ""} aria-pressed={viewMode === "list"} onClick={() => chooseView("list")} aria-label="List view"><List size={15} /></button>
             </div>
           </div>
 
@@ -759,7 +1228,14 @@ export function RhymeStudio() {
             <label className="concept-field">
               <Sparkles size={14} />
               <span>means like</span>
-              <input value={concept} onChange={(event) => setConcept(event.target.value)} placeholder="quiet, escape, home…" />
+              <input
+                value={concept}
+                onChange={(event) => setConcept(event.target.value)}
+                onBlur={() => {
+                  if (concept.trim()) recordResearch({ type: "concept", concept });
+                }}
+                placeholder="quiet, escape, home…"
+              />
               <span className="on-device">on device</span>
             </label>
           )}
@@ -771,11 +1247,15 @@ export function RhymeStudio() {
                 type="range"
                 min="0"
                 max="100"
-                value={meaningBalance}
-                onChange={(event) => setMeaningBalance(Number(event.target.value))}
+                value={semanticEnabled ? meaningBalance : 0}
+                onChange={(event) => updateMeaningBalance(Number(event.target.value))}
+                onPointerUp={() => recordResearch({ type: "meaning_mix", value: meaningBalance })}
+                onKeyUp={() => recordResearch({ type: "meaning_mix", value: meaningBalance })}
                 aria-label="Balance sound and meaning"
+                aria-valuetext={semanticEnabled ? `${meaningBalance}% meaning` : "Meaning off · move to enable"}
               />
-              <span>Meaning</span>
+              <span className="meaning-label">Meaning</span>
+              {!semanticEnabled && <span className="meaning-off-hint">Meaning off · move to enable</span>}
             </label>
             <label className="mix-control tightness-control">
               <span>Tight</span>
@@ -813,7 +1293,28 @@ export function RhymeStudio() {
 
           <div className="engine-status" aria-live="polite">
             <span><EngineDot status={engineStatus} /> {engineStatus === "ready" ? `${lexiconCount.toLocaleString()} words local` : `${engineProgress}% sound map`}</span>
-            <span><EngineDot status={semanticStatus} /> {semanticStatus === "ready" ? "meaning ready" : semanticStatus === "error" ? "sound-only mode" : semanticStatus === "loading" ? `${Math.round(semanticProgress)}% meaning` : "meaning queued"}</span>
+            <span className="semantic-engine" data-semantic-state={semanticStatus}>
+              <EngineDot status={semanticStatus} />
+              <span>
+                {semanticStatus === "ready"
+                  ? "meaning ready"
+                  : semanticStatus === "error"
+                    ? "meaning unavailable"
+                    : semanticStatus === "loading"
+                      ? "loading locally · ~46 MiB"
+                      : "meaning off · ~46 MiB optional"}
+              </span>
+              <button
+                type="button"
+                aria-label={semanticStatus === "idle" ? "Enable meaning" : semanticStatus === "error" ? "Retry meaning" : "Disable meaning"}
+                onClick={semanticStatus === "idle" ? () => enableSemantic("control") : semanticStatus === "error" ? retrySemantic : disableSemantic}
+              >
+                {semanticStatus === "idle" ? "enable" : semanticStatus === "error" ? "retry" : semanticStatus === "loading" ? "cancel" : "disable"}
+              </button>
+              {semanticStatus === "error" && (
+                <button type="button" aria-label="Disable meaning" onClick={disableSemantic}>off</button>
+              )}
+            </span>
             <span className={searching ? "searching" : ""}>{searching ? "updating…" : statusMessage}</span>
           </div>
 
@@ -865,7 +1366,7 @@ export function RhymeStudio() {
                       aria-hidden="true"
                       className={`graph-node ${active ? "active" : ""} ${pinned ? "pinned" : ""}`}
                       style={style}
-                      onClick={() => setSelectedId(candidate.id)}
+                      onClick={() => selectCandidate(candidate)}
                       onDoubleClick={() => expandCandidate(candidate)}
                     >
                       <span>{candidate.word}</span>
@@ -877,7 +1378,7 @@ export function RhymeStudio() {
             ) : (
               <div className="full-list">
                 {visibleCandidates.map((candidate, index) => (
-                  <button key={candidate.id} type="button" className={candidate.id === selected?.id ? "active" : ""} onClick={() => setSelectedId(candidate.id)}>
+                  <button key={candidate.id} type="button" className={candidate.id === selected?.id ? "active" : ""} onClick={() => selectCandidate(candidate)}>
                     <span className="rank">{String(index + 1).padStart(2, "0")}</span>
                     <span className="result-word">{candidate.word}<small>{candidate.pronunciation}</small></span>
                     <span className={`relation-pill ${RELATION_CLASS[candidate.relation]}`}>{RELATION_LABEL[candidate.relation]}</span>
@@ -894,7 +1395,7 @@ export function RhymeStudio() {
                 key={candidate.id}
                 type="button"
                 className={candidate.id === selected?.id ? "active" : ""}
-                onClick={() => setSelectedId(candidate.id)}
+                onClick={() => selectCandidate(candidate)}
                 aria-label={`${candidate.word}, ${candidate.overall} percent match, ${RELATION_LABEL[candidate.relation]}`}
               >
                 <span className="rail-rank">{String(index + 1).padStart(2, "0")}</span>
@@ -945,7 +1446,11 @@ export function RhymeStudio() {
               <div className="score-card">
                 <div className="score-card-title"><span>FIT BREAKDOWN</span><span>0—100</span></div>
                 <ScoreBar label="Sound" value={selected.sound} tone="var(--accent-amber)" />
-                <ScoreBar label="Meaning" value={selected.meaning} tone="var(--accent-lilac)" />
+                <ScoreBar
+                  label={semanticStatus === "ready" ? "Meaning" : "Meaning (off)"}
+                  value={semanticStatus === "ready" ? selected.meaning : 0}
+                  tone="var(--accent-lilac)"
+                />
                 <ScoreBar label="Flow" value={selected.flow} tone="var(--accent-coral)" />
               </div>
 
