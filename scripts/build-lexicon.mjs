@@ -5,12 +5,26 @@ import { dictionary } from "cmu-pronouncing-dictionary";
 
 const require = createRequire(import.meta.url);
 const wordnet = require("wordnet-db");
+const subtlex = require("subtlex-word-frequencies");
 
 const outputDirectory = new URL("../public/data/", import.meta.url);
 const outputFile = new URL("cmudict.compact.json", outputDirectory);
 
 const partOfSpeechBit = { noun: 1, verb: 2, adj: 4, adv: 8 };
 const wordnetMetadata = new Map();
+const spokenFrequency = new Map(
+  subtlex.map(({ word, count }) => [word.toLowerCase(), count]),
+);
+const maximumSpokenCount = Math.max(...spokenFrequency.values());
+
+const entryFlag = {
+  wordnet: 1,
+  spoken: 2,
+  authored: 4,
+  slang: 8,
+  reference: 16,
+  uk: 32,
+};
 
 for (const partOfSpeech of Object.keys(partOfSpeechBit)) {
   const contents = await readFile(join(wordnet.path, `index.${partOfSpeech}`), "utf8");
@@ -38,6 +52,20 @@ const curatedExtras = new Set([
   "wack", "wagwan", "wanna", "y'all", "yeet",
 ]);
 
+// Small transparent reference and British-English layers stop the build-time
+// lemma filter from erasing the places, products, registers, and spoken forms
+// that are particularly useful in lyric writing. They are not a style corpus.
+const curatedReferences = new Set([
+  "dorchester", "malbec", "mayfair", "moncler", "shiraz", "sonnyjim",
+  "vuvuzela",
+]);
+
+const ukTerms = new Set([
+  "bloke", "brum", "bruv", "chuffed", "dodgy", "dorchester", "ends",
+  "gaff", "geezer", "graft", "innit", "mandem", "mayfair", "peng",
+  "roadman", "ting", "wagwan",
+]);
+
 // Small, authored overrides cover high-value spoken/slang anchors that formal
 // dictionaries routinely omit. They are intentionally transparent and easy to
 // replace with dialect packs later.
@@ -58,9 +86,14 @@ const curatedPronunciations = {
   tryna: ["T R AY1 N AH0"], vibing: ["V AY1 B IH0 NG"],
   wack: ["W AE1 K"], wagwan: ["W AA1 G W AA2 N"], wanna: ["W AA1 N AH0"],
   "y'all": ["Y AO1 L"], yeet: ["Y IY1 T"],
+  geezer: ["G IY1 Z ER0"], malbec: ["M AE1 L B EH0 K"],
+  moncler: ["M AA1 N K L EH2 R"], shiraz: ["SH IH0 R AA1 Z"],
+  sonnyjim: ["S AH1 N IY0 JH IH2 M"],
+  vuvuzela: ["V UW2 V UW0 Z EH1 L AH0"],
 };
 
 const grouped = new Map();
+const cmuWords = new Set();
 const supportedPhonemes = new Set([
   "AA", "AE", "AH", "AO", "AW", "AY", "B", "CH", "D", "DH", "EH",
   "ER", "EY", "F", "G", "HH", "IH", "IY", "JH", "K", "L", "M", "N",
@@ -94,6 +127,7 @@ for (const [rawKey, pronunciation] of Object.entries(dictionary)) {
   const variants = grouped.get(word) ?? [];
   if (!variants.includes(pronunciation)) variants.push(pronunciation);
   grouped.set(word, variants);
+  cmuWords.add(word);
 }
 
 for (const [word, pronunciations] of Object.entries(curatedPronunciations)) {
@@ -119,10 +153,31 @@ const phrases = [
 ];
 
 const entries = [...grouped.entries()]
-  .filter(([word]) => wordnetMetadata.has(word) || curatedExtras.has(word))
+  .filter(([word]) =>
+    wordnetMetadata.has(word) ||
+    spokenFrequency.has(word) ||
+    curatedExtras.has(word) ||
+    curatedReferences.has(word) ||
+    ukTerms.has(word),
+  )
   .map(([word, variants]) => {
     const metadata = wordnetMetadata.get(word) ?? { pos: 0, senses: 1 };
-    return [word, variants, metadata.pos, metadata.senses];
+    const count = spokenFrequency.get(word);
+    const spokenScore = count === undefined
+      ? undefined
+      : Math.log10(count + 1) / Math.log10(maximumSpokenCount + 1);
+    const fallbackScore = .26 + Math.min(.14, Math.log2(1 + metadata.senses) * .035);
+    const utility = spokenScore === undefined
+      ? (curatedReferences.has(word) ? .43 : curatedExtras.has(word) ? .5 : fallbackScore)
+      : .18 + .8 * spokenScore ** 1.12;
+    let flags = 0;
+    if (wordnetMetadata.has(word)) flags |= entryFlag.wordnet;
+    if (spokenFrequency.has(word)) flags |= entryFlag.spoken;
+    if (Object.hasOwn(curatedPronunciations, word) && !cmuWords.has(word)) flags |= entryFlag.authored;
+    if (curatedExtras.has(word)) flags |= entryFlag.slang;
+    if (curatedReferences.has(word)) flags |= entryFlag.reference;
+    if (ukTerms.has(word)) flags |= entryFlag.uk;
+    return [word, variants, metadata.pos, metadata.senses, Math.round(utility * 1000), flags];
   })
   .sort(([a], [b]) => a.localeCompare(b));
 
@@ -130,9 +185,10 @@ await mkdir(outputDirectory, { recursive: true });
 await writeFile(
   outputFile,
   JSON.stringify({
-    version: "cmudict-npm-3.0.0+rhymegraph-curated-1",
-    dialect: "en-US",
-    source: "cmu-pronouncing-dictionary@3.0.0 + WordNet 3.1 lemma filter + authored slang overrides",
+    version: "cmudict-npm-3.0.0+subtlex-us-2.0.0+rhymegraph-curated-2",
+    dialect: "en-US with labelled en-GB and authored performance forms",
+    source: "cmu-pronouncing-dictionary@3.0.0 + WordNet 3.1 metadata + SUBTLEX-US spoken frequency + authored slang/reference overrides",
+    entryFlags: entryFlag,
     entries,
     phrases,
   }),

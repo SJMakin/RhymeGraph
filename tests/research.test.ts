@@ -76,7 +76,7 @@ test("research export is versioned, useful, and excludes draft content", () => {
   const serialized = JSON.stringify(exported);
   assert.equal(exported.schemaVersion, "1.0.0");
   assert.equal(exported.schemaId, "urn:rhymegraph:research-session:1");
-  assert.equal(exported.appVersion, "0.2.0");
+  assert.equal(exported.appVersion, "0.3.0");
   assert.equal(exported.privacy.fullDraftIncluded, false);
   assert.equal(exported.privacy.sentToNetwork, false);
   assert.deepEqual(exported.privacy.excluded, ["draftText", "projectTitle", "cursorPositions"]);

@@ -1,4 +1,4 @@
-import type { RecommendationIntent } from "../phonetics";
+import type { PerformanceDialect, RecommendationIntent } from "../phonetics";
 import { withBasePath } from "../public-path";
 import {
   isPhoneticWorkerEvent,
@@ -15,6 +15,8 @@ export interface SearchOptions {
   semanticScores?: Record<string, number>;
   limit?: number;
   minPhonetic?: number;
+  reach?: number;
+  dialect?: PerformanceDialect;
   exclude?: string[];
   weights?: { sound?: number; meaning?: number; utility?: number };
 }
@@ -34,7 +36,7 @@ export class PhoneticSearchClient {
   private latestSearchId?: number;
 
   constructor(worker?: Worker) {
-    this.worker = worker ?? new Worker(withBasePath("/workers/phonetic.worker.js"), {
+    this.worker = worker ?? new Worker(withBasePath("/workers/phonetic.worker.v3.js"), {
       type: "module",
       name: "rhymegraph-phonetics",
     });
@@ -117,3 +119,5 @@ export class PhoneticSearchClient {
 export function createPhoneticSearchClient() {
   return new PhoneticSearchClient();
 }
+
+export { searchCandidateId } from "./protocol";

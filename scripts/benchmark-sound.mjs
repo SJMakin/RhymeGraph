@@ -8,14 +8,14 @@ import { pathToFileURL } from "node:url";
 import {
   DEFAULT_LEXICON_URL,
   DEFAULT_SCENARIO_URL,
-  ENGINE_SOURCE_URL,
+  ENGINE_SOURCE_URLS,
   assertCoverageExpectations,
   lexiconEntriesFromPack,
   validateDataset,
 } from "../evaluation/core.mjs";
 import { createRhymeEngine } from "../lib/phonetics/engine.ts";
 
-export const SOUND_BENCHMARK_REPORT_VERSION = "rhymegraph.sound-benchmark.v1";
+export const SOUND_BENCHMARK_REPORT_VERSION = "rhymegraph.sound-benchmark.v3";
 
 const DEFAULT_OUTPUT = resolve("outputs/sound-benchmark.json");
 const DEFAULT_ITERATIONS = 5;
@@ -24,9 +24,16 @@ const DEFAULT_QUERY_COUNT = 6;
 const REFERENCE_MINIMUM_TIMED_PASSES = 30;
 const REFERENCE_MINIMUM_WARMUP_PASSES = 3;
 const QUERY_SELECTION_STRATEGY = "deterministic-stratified-greedy-v1";
+const DEFAULT_BROWSER_SOUND_PROFILE = Object.freeze({
+  limit: 96,
+  minPhonetic: .3048,
+  reach: .48,
+  dialect: "en-GB",
+  weights: Object.freeze({ sound: .92, meaning: 0, utility: .08 }),
+});
 
 function usage() {
-  return `Usage: node --experimental-strip-types scripts/benchmark-sound.mjs [options]
+  return `Usage: npx tsx scripts/benchmark-sound.mjs [options]
 
 Options:
   --dataset PATH          Scenario dataset (default: evaluation/scenarios.v1.json)
@@ -263,10 +270,10 @@ function timed(operation) {
 
 async function loadBenchmarkInputs(options) {
   const readStarted = performance.now();
-  const [lexiconContents, scenarioContents, engineSource] = await Promise.all([
+  const [lexiconContents, scenarioContents, engineSources] = await Promise.all([
     readFile(options.lexiconUrl),
     readFile(options.scenarioUrl),
-    readFile(ENGINE_SOURCE_URL),
+    Promise.all(ENGINE_SOURCE_URLS.map((url) => readFile(url))),
   ]);
   const readElapsedMs = performance.now() - readStarted;
   const lexiconParse = timed(() => JSON.parse(lexiconContents.toString("utf8")));
@@ -305,7 +312,7 @@ async function loadBenchmarkInputs(options) {
     revisions: {
       scenarios: revision(scenarioContents),
       lexicon: revision(lexiconContents),
-      engine: revision(engineSource),
+      engine: revision(Buffer.concat(engineSources)),
     },
     bytes: {
       scenarios: scenarioContents.byteLength,
@@ -335,7 +342,7 @@ function runPairComparisonPass(engine, queries) {
   return { elapsedMs: performance.now() - started, operations, checksum };
 }
 
-function runExhaustivePass(engine, queries) {
+function runIndexedRecommendationPass(engine, queries) {
   const perQuery = [];
   let checksum = 0;
   const passStarted = performance.now();
@@ -344,9 +351,7 @@ function runExhaustivePass(engine, queries) {
     const results = engine.recommend({
       anchors: [query.anchor, ...query.pins],
       intent: query.intent,
-      minPhonetic: 0,
-      limit: 25,
-      weights: { sound: 1, meaning: 0, utility: 0 },
+      ...DEFAULT_BROWSER_SOUND_PROFILE,
     });
     const elapsedMs = performance.now() - started;
     checksum += results.reduce((total, result) => total + result.score, 0);
@@ -372,12 +377,12 @@ export async function runSoundBenchmark(options) {
 
   for (let pass = 0; pass < options.warmup; pass += 1) {
     runPairComparisonPass(inputs.engine, inputs.queries);
-    runExhaustivePass(inputs.engine, inputs.queries);
+    runIndexedRecommendationPass(inputs.engine, inputs.queries);
   }
 
   const pairSamples = [];
-  const exhaustivePassSamples = [];
-  const exhaustiveQuerySamples = [];
+  const indexedPassSamples = [];
+  const indexedQuerySamples = [];
   let checksum = 0;
   let pairOperationsPerPass = 0;
   for (let pass = 0; pass < options.iterations; pass += 1) {
@@ -385,10 +390,10 @@ export async function runSoundBenchmark(options) {
     pairSamples.push(pair.elapsedMs);
     pairOperationsPerPass = pair.operations;
     checksum += pair.checksum;
-    const exhaustive = runExhaustivePass(inputs.engine, inputs.queries);
-    exhaustivePassSamples.push(exhaustive.elapsedMs);
-    exhaustiveQuerySamples.push(...exhaustive.perQuery.map((sample) => sample.elapsedMs));
-    checksum += exhaustive.checksum;
+    const indexed = runIndexedRecommendationPass(inputs.engine, inputs.queries);
+    indexedPassSamples.push(indexed.elapsedMs);
+    indexedQuerySamples.push(...indexed.perQuery.map((sample) => sample.elapsedMs));
+    checksum += indexed.checksum;
   }
   const memoryAfterBenchmark = memoryMiB();
   const quality = benchmarkQuality(options.iterations, {
@@ -430,9 +435,12 @@ export async function runSoundBenchmark(options) {
       warmupPasses: options.warmup,
       timedPasses: options.iterations,
       queryCount: inputs.queries.length,
-      recommendationLimit: 25,
-      recommendationMinPhonetic: 0,
-      recommendationWeights: { sound: 1, meaning: 0, utility: 0 },
+      recommendationProfile: "v0.3-browser-default-sound-only",
+      recommendationLimit: DEFAULT_BROWSER_SOUND_PROFILE.limit,
+      recommendationMinPhonetic: DEFAULT_BROWSER_SOUND_PROFILE.minPhonetic,
+      recommendationReach: DEFAULT_BROWSER_SOUND_PROFILE.reach,
+      recommendationDialect: DEFAULT_BROWSER_SOUND_PROFILE.dialect,
+      recommendationWeights: DEFAULT_BROWSER_SOUND_PROFILE.weights,
       timer: "node:perf_hooks performance.now wall clock",
       selection: inputs.selection,
       querySet: inputs.queries.map((query) => ({
@@ -454,15 +462,15 @@ export async function runSoundBenchmark(options) {
         rawSamplesMs: pairSamples.map((sample) => round(sample)),
         summary: summarizeSamples(pairSamples),
       },
-      exhaustiveRecommendationQuery: {
+      indexedRecommendationQuery: {
         operationsPerPass: inputs.queries.length,
-        rawSamplesMs: exhaustiveQuerySamples.map((sample) => round(sample)),
-        summary: summarizeSamples(exhaustiveQuerySamples),
+        rawSamplesMs: indexedQuerySamples.map((sample) => round(sample)),
+        summary: summarizeSamples(indexedQuerySamples),
       },
-      exhaustiveRecommendationPass: {
+      indexedRecommendationPass: {
         queriesPerPass: inputs.queries.length,
-        rawSamplesMs: exhaustivePassSamples.map((sample) => round(sample)),
-        summary: summarizeSamples(exhaustivePassSamples),
+        rawSamplesMs: indexedPassSamples.map((sample) => round(sample)),
+        summary: summarizeSamples(indexedPassSamples),
       },
     },
     memoryMiB: {
@@ -480,7 +488,8 @@ export async function runSoundBenchmark(options) {
           : `Not reference eligible: ${quality.ineligibilityReasons.join(" ")}`
         : `Diagnostic only: ${options.iterations} timed passes is below the ${REFERENCE_MINIMUM_TIMED_PASSES}-pass minimum; observedP95Ms is not a robust p95.`,
       "Wall-clock timings are sensitive to competing load, thermal state, and power management.",
-      "Exhaustive recommendation scans the complete shipped lexicon; this is not the future indexed-search benchmark.",
+      "Recommendation timings cover the shipped bounded retrieval index plus exact scoring of its candidate pool; they are not exhaustive full-lexicon timings.",
+      "Recommendation requests use the v0.3 browser's default sound-only settings (UK non-rhotic beta, 48% reach, 8% utility); they do not measure semantic retrieval or a writer-adjusted control state.",
       "Process memory is sampled without forcing garbage collection; deltas are post-run observations, not peak or retained-allocation measurements.",
       "Compare reports only when scenario, lexicon, engine, runtime/device, power profile, warm-up, and query-set manifests match.",
     ],

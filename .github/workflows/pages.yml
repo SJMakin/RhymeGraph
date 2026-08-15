@@ -35,7 +35,9 @@ jobs:
       - run: npm run lint
       - run: npm test
       - name: Validate evidence inputs
-        run: npm run evaluate:check && npm run benchmark:sound:check
+        run: npm run evaluate:check && npm run benchmark:sound:check && npm run semantic:index:check
+      - name: Verify checked-in workers match their sources
+        run: npm run workers:check
       - run: npx playwright install --with-deps chromium
 
       - name: Build and test the Pages export

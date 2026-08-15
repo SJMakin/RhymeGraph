@@ -3,17 +3,17 @@
 ## Product and technical specification
 
 > [!IMPORTANT]
-> This document is the original product and architecture specification, not a claim that every section shipped in v0.1. See [implementation status](./docs/STATUS.md), the [implementation diary](./docs/IMPLEMENTATION_DIARY.md), and the [current roadmap](./docs/ROADMAP.md) for the source of truth.
+> This remains a product and architecture design document, not a claim that every proposed feature has shipped or been validated. It has been revised to reflect the v0.3 implementation where the architecture materially changed. See [implementation status](./docs/STATUS.md), the [implementation diary](./docs/IMPLEMENTATION_DIARY.md), and the [current roadmap](./docs/ROADMAP.md) for the operational source of truth.
 
 | Field | Value |
 |---|---|
-| Status | Draft v0.2 — ready for product review |
+| Status | Draft v0.3 — implementation-aligned; product validation pending |
 | Working title | RhymeGraph |
 | Initial audience | Rappers and lyricists |
 | Initial platform | Local-first web application |
 | Core promise | Find the next useful word by sound, meaning, and flow—not by spelling |
 | Runtime dependency policy | No proprietary dictionary or inference API required |
-| Last revised | 2026-08-11 |
+| Last revised | 2026-08-15 |
 
 ## 1. Executive decision
 
@@ -106,14 +106,14 @@ The primary desktop workspace contains:
 - **Inspector:** pronunciation, score explanation, filters, definitions, and actions.
 - **Tray:** pinned words/phrases representing the current sound direction.
 
-On small screens, Draft and Explore become two fast-switching views. The graph always has a synchronized ranked-list representation for accessibility and precise scanning.
+On small screens, **Focus** can give Explore most of the viewport while a dismissible drawer holds candidate detail. Families, Map, and List remain synchronized representations; the list is the precise keyboard/accessibility path.
 
 ### Core loop
 
 1. The writer types a line or enters a word.
 2. They select a word, syllable span, or phrase as the sound anchor.
 3. RhymeGraph immediately shows a phonetic neighbourhood.
-4. Semantic results refine when the local embedding worker is ready.
+4. When explicitly enabled, semantic retrieval can add full-vocabulary meaning neighbours before the combined exact rerank.
 5. The writer previews, expands, pins, dismisses, or inserts a candidate.
 6. Pinning changes the inferred rhyme family and reranks the neighbourhood.
 7. Expanding moves through the graph while preserving a breadcrumb trail.
@@ -160,20 +160,24 @@ Every candidate supports:
 
 ## 6. Graph design
 
-### A local, semantic graph
+### A local, evidence-backed graph
 
 Render approximately 12–24 candidate nodes, the active centre, and at most four pinned anchors (five anchors total). Never render the full lexicon.
 
+The v0.3 map is local to the current visible candidate set. Candidate-to-candidate edges are sparse phonetic k-nearest-neighbour relationships computed from actual pronunciation comparisons. Anchor edges record candidate-to-query sound. Query-to-candidate semantic scores must not be presented as pairwise candidate semantics.
+
 The layout must encode something understandable:
 
-- Radius from centre: combined recommendation distance.
-- Angular region: dominant relationship family—vowel, ending/coda, rhythm, or semantic bridge.
+- Radius from centre: candidate-to-anchor sound distance.
+- Local grouping: actual candidate-to-candidate phonetic similarity.
 - Edge width: relationship strength.
-- Edge style: solid for high-confidence dictionary pronunciation; dashed for generated or adventurous matches.
-- Node size: lexical utility/commonness.
-- Node ring: pinned, active, previously visited, or inserted state.
+- Edge style: distinguish candidate-neighbour edges from anchor edges; estimated anchor forms may be dashed.
+- Node size: overall recommendation score in the current map.
+- Node state: pinned and active rings; visited/inserted state remains a possible extension.
 
-Use a deterministic, seeded layout so nodes do not jump randomly after each rerank. A light collision simulation is acceptable after initial placement; an unconstrained force graph is not.
+Use a deterministic, seeded, bounded layout so nodes do not jump randomly after each rerank. A fixed local force/collision pass is acceptable; an unconstrained or unexplained global projection is not.
+
+The default v0.3 explorer is the family board—locked ending, vowel, consonant, phrase/mosaic, and meaning—because it remains legible on small monitors. A later pairwise semantic or fused graph is an evaluation experiment, not something inferred from independent query scores. A corpus-wide embedding or k-means map remains out of scope until local exploration proves useful.
 
 ### Why a list remains present
 
@@ -284,12 +288,14 @@ interface LexicalSense {
 
 ### Initial data sources
 
-- **Pronunciation:** CMUdict, whose maintainers permit unrestricted research and commercial use and request acknowledgement.
-- **Meanings and lexical relations:** Open English WordNet, currently CC BY 4.0.
+- **Pronunciation:** CMUdict through `cmu-pronouncing-dictionary`, with upstream acknowledgement and bundled licence terms.
+- **Meanings and lexical metadata:** WordNet 3.1 through `wordnet-db`; the semantic build derives bounded primary definitions and gloss/POS/synonym documents rather than shipping the source database files.
+- **Spoken coverage and utility:** SUBTLEX-US through `subtlex-word-frequencies`; this is a US subtitle-frequency source, not a pronunciation or dialect corpus.
 - **Phonological feature definitions:** an audited internal table, potentially derived from MIT-licensed PanPhon data.
-- **Frequency, slang/register, phrases, UK pronunciations, and etymology:** unresolved until source quality and redistribution rights are audited.
+- **Authored layers:** small, labelled slang/reference/UK additions; 8 pack phrase fixtures; and 151 ordinary performance-phrase building blocks composed from existing word pronunciations at runtime.
+- **Broader phrase corpora, complete UK pronunciations, and etymology:** unresolved until quality and redistribution rights are audited.
 
-Every generated record carries provenance. Data without known redistribution rights does not enter a shipped asset.
+Every generated record should carry provenance. Data without known redistribution rights does not enter a shipped asset. Commercial rhyme dictionaries and lyric sites are not scraped; the authored phrase layer is not copied artist text or a hidden style corpus.
 
 ## 9. Phonetic representation
 
@@ -308,26 +314,30 @@ Each phoneme is represented through articulatory features rather than as an arbi
 The definitive pairwise score comes from stress-aware sequence alignment:
 
 1. Locate primary and secondary stressed nuclei.
-2. Generate plausible alignment windows around stressed syllables.
+2. Generate one- to six-syllable suffix windows around plausible rhyme material.
 3. Align phoneme-feature sequences with weighted insertion, deletion, and substitution costs.
 4. Compute separate vowel, coda, consonance, stress, and whole-span scores.
-5. Prefer longer coherent matches over isolated coincidental phonemes.
-6. Apply dialect-specific equivalence and merger rules.
-7. Calibrate scores separately by syllable shape so short words do not dominate unfairly.
+5. Score salient-window coverage and syllable-depth balance so a short exact ending does not masquerade as a full long rhyme.
+6. Prefer longer coherent matches over isolated coincidental phonemes, but spend depth rewards only inside the base score's remaining headroom.
+7. Apply conservative dialect-specific equivalence and rhoticity rules.
+8. Calibrate scores separately by syllable shape so short words do not dominate unfairly.
+
+Long-span depth rewards require compatible stress rather than rewarding length alone. Phrase-involved comparisons also require stronger coverage than ordinary word-suffix rhyme, so an exact final word does not outrank a coherent cross-boundary chain by itself. A **full rhyme** label requires a stress component of at least `.70`; inverted word-stress patterns must not saturate into that label, and their explanation must explicitly say **emphasis differs**.
 
 The exact cost matrix is a product hypothesis and must be tuned against human judgments. It belongs in versioned data/configuration, not scattered constants.
 
 ### Retrieval representation
 
-Detailed alignment is too expensive across the full vocabulary. Generate a compact retrieval signature containing:
+Detailed alignment is too expensive across the full vocabulary. The v0.3 multi-channel index uses signatures containing:
 
-- Last stressed vowel and neighbouring vowel trajectory.
-- Coda feature summary.
-- Final two or three syllable shapes.
-- Stress pattern.
-- Position-weighted articulatory feature pooling.
+- Final one to three exact/coarse vowel symbols.
+- Exact and coarse outer-vowel sketches spanning the first and third vowels of the last three-vowel window.
+- Exact final coda.
+- Final one to three consonant symbols.
+- Coarse voicing-aware consonant-family suffixes of length two and three.
+- Final two or three stress positions.
 
-This signature retrieves a generous candidate pool. The detailed alignment reranks it. A learned phonetic embedding may later improve recall, but it is not required for the first product.
+Posting lists for exact/coarse vowel sequences and three-vowel outer sketches, vowel families, codas, exact consonant suffixes, coarse voicing-aware consonant families, and stress retrieve a bounded union; exact alignment reranks it. Reach controls shortlist breadth and candidate diversity. Authored phrases and exact semantic-union terms are retained explicitly. A learned phonetic embedding may later improve recall, but the current debt is measurable: a focused `orange` Pivot audit recovered 8/25 exhaustive top-result identities despite only about .0031 mean score regret.
 
 ## 10. Semantic embeddings in the browser
 
@@ -335,28 +345,35 @@ Use `@huggingface/transformers` in a Web Worker. The current baseline is an ONNX
 
 ### What is embedded
 
-Avoid treating one embedding of an isolated spelling as its permanent meaning. Embed:
+Avoid treating an isolated spelling as a complete permanent meaning. In the v0.3 implementation:
 
-- The active line and optional surrounding lines.
-- An explicit concept prompt when provided.
-- Lexical sense glosses during the offline data build.
-- A phrase directly when the user enters one.
+- the browser embeds the active line or explicit concept query once per semantic search;
+- the build embeds one bounded document per compact word and explicit pack fixture;
+- a document combines spelling, available POS, primary WordNet gloss material, and a small synonym set;
+- a bounded primary WordNet definition is retained for explanation when available;
+- runtime-authored performance phrases remain phonetic-only unless they are also explicit semantic-index entries.
 
-Candidate semantic score is the best context-to-sense match, with penalties for a clearly incompatible part of speech or register.
+This word-document baseline is deliberately smaller and easier to audit than a sense-level vector graph. It improves candidate generation but does not solve polysemy or lyric-context meaning; sense-level indexing remains an evaluated alternative.
 
 ### Distribution strategy
 
 - The application shell and phonetic search work before the model is ready.
 - Load semantic inference lazily and show honest progress on first use.
-- Use WebGPU when available and verified; fall back to WASM.
-- Cache model assets through browser caching/service-worker mechanisms.
+- Use the current single-thread WASM path; evaluate WebGPU separately before changing the compatibility and benchmark baseline.
+- Cache model/index assets through ordinary browser caching; a service worker is not yet shipped.
 - Host pinned model artifacts ourselves in production so the product is not operationally dependent on the Hugging Face Hub.
 - Pin model and tokenizer revisions; never silently change embedding space.
-- Store precomputed sense embeddings with the same model-version identifier.
+- Store precomputed word-document embeddings with the same pinned model/data recipe and integrity metadata.
+- Content-revision lexicon/index URLs and verify the semantic binary with WebCrypto SHA-256 in the browser.
+- Publish versioned, self-contained worker entrypoints and retain the live prior Pages chunk `workers/chunks/public-path-B_7tJUiL.js` for a cache window; cover that boundary with an artifact regression and bump worker and asset namespaces together on future coupled changes.
 
-### Initial semantic index strategy
+### v0.3 semantic index strategy
 
-Do not embed every candidate during each query. Precompute quantized gloss embeddings and ship them in lexical shards. The browser embeds only the query context, then computes dot products for the phonetic candidate pool. A full semantic approximate-nearest-neighbour index is only needed for Bridge mode if brute-force benchmarks fail.
+Do not embed every candidate during a query. The build precomputes 54,140 row-wise int8 MiniLM word-document vectors of 384 dimensions. The browser embeds only the query and scans the local index. A CDF fitted to unrelated corpus pairs produces an available percentile-like score; the current UI and ranking use a fixed clamped `(cosine - null mean) / (4 × null SD)` strength. Those hits are unioned with the phonetic shortlist, receive exact sound scores, and enter late fusion. This lets meaning introduce a candidate absent from the original sound pool without treating either transform as a relevance probability or batch-stretching a weak leader to 100.
+
+The vocabulary is currently small enough to evaluate a direct local scan before introducing an approximate-nearest-neighbour dependency. The 21,006,336-byte binary and 3,386,621-byte manifest total 23.26 MiB raw; 35,470 entries (65.5%) carry a bounded definition. The complete optional semantic path is about 69.10 MiB raw; its exact file total differs between root and Pages exports because the versioned worker embeds the deployment base path. The binary SHA-256 is `2e48ce37bd70f1b1b4805a915214071ec16fe81a157f861c3621f9526b789d5e`; the manifest SHA-256 is `168d0c07e41daefecdc4f06667c3b349d8474948d890a92bceaee2e45174cecf`; and CI verifies six exact model/tokenizer/config/vocabulary files with set hash `551f651982a81f63580c48b0fe704b66fab2be32bfd562123ee3bc1636273cd8`. A local Node checker observed a 41.53 ms median full scan.
+
+One headless Chromium 151/i7-7500U sample against a dirty local static export observed cold DOM/sound/meaning/combined readiness at `253.07/2218.10/4162.42/5155.22 ms` and same-context repeat readiness at `81.44/3243.22/2218.32/3753.41 ms`. Playwright finished 24/24 cold requests (10/10 semantic) and 17/17 repeat requests (3/3 semantic), with zero failures or in-flight work. It observed `71,692,443` semantic and `74,904,430` total encoded-response-body bytes cold; repeat semantic and total encoded response bodies were both `21,006,336` bytes. These are not wire-transfer or memory totals; one sample is not p75. Physical-mobile performance and human usefulness remain unmeasured.
 
 ## 11. Candidate generation and ranking
 
@@ -365,25 +382,18 @@ Do not embed every candidate during each query. Precompute quantized gloss embed
 ```text
 1. Resolve anchor pronunciations for the selected dialect
 2. Infer a shared pattern when several anchors are pinned
-3. Union candidates from phonetic indexes
-4. Add semantic-bridge candidates when requested
+3. Union candidates from multi-channel phonetic indexes
+4. Add independently retrieved full-vocabulary semantic candidates when requested
 5. Apply hard lexical filters
 6. Run detailed phonetic alignment
 7. Score meaning, stress/cadence, utility, and confidence
 8. Fuse calibrated component scores
-9. Diversify the visible set
-10. Build graph edges and explanations
+9. Diversify and reserve useful phrase/family coverage according to Reach
+10. Backfill the filtered visible set from the 96-result sound or 120-result hybrid pool
+11. Build family channels, actual local phonetic kNN edges, and explanations
 ```
 
-Suggested pool sizes for the first benchmark, not permanent constants:
-
-- Exact/full-tail index: up to 100.
-- Related vowel families: up to 300.
-- Related coda/consonant families: up to 300.
-- Compact phonetic nearest neighbours: up to 500.
-- Semantic bridge retrieval: up to 200.
-- Detailed rerank pool after deduplication: target 500–1,200.
-- Visible result set: 12–24.
+Pool sizes are versioned ranking parameters rather than product promises. The v0.3 worker exposes 96 sound candidates or 120 hybrid candidates to the UI for filtering/backfill, while the family board/map/list show a smaller legible subset. The indexed exact-rerank pool expands with Reach and pin count; authored phrases and exact semantic-union terms are protected from the phonetic cap. This currently exceeds the roadmap's eventual compact-pool ambition and must be tuned only after identity-recall and timing evidence exist.
 
 ### Late-fusion score
 
@@ -415,7 +425,7 @@ Hard filters include explicit content policy, user exclusions, impossible syllab
 
 This is a core differentiator and part of the first prototype.
 
-For several sound anchors:
+The active anchor plus at most four pins form a family of no more than five total anchors. For several sound anchors:
 
 1. Align their strongest pronunciation spans.
 2. Find features shared by all anchors and features shared by a majority.
@@ -424,13 +434,12 @@ For several sound anchors:
 5. Score candidate consistency against every anchor as well as the inferred family.
 
 ```text
-family_fit(c) =
-    0.45 × mean(similarity(c, anchors))
-  + 0.25 × min(similarity(c, anchors))
-  + 0.30 × inferred_pattern_match(c)
+family_consistency(c) =
+    0.68 × mean(similarity(c, anchors))
+  + 0.32 × min(similarity(c, anchors))
 ```
 
-These weights are merely an initial experimental configuration. The minimum term prevents a centroid-near candidate that clashes badly with one pinned word from ranking too highly.
+These are the current experimental v0.3 weights, not validated constants. The minimum term prevents a centroid-near candidate that clashes badly with one pinned word from ranking too highly. Components shared across comparisons are still exposed as the family explanation; a separately learned family-pattern term remains a design option rather than a shipped score.
 
 The UI should visualize the inferred pattern, for example:
 
@@ -447,9 +456,9 @@ Users may remove an anchor or mark it as semantic-only if it is distorting the f
 
 Phrase support is essential to the product vision, but unrestricted phrase generation would overwhelm the first build.
 
-### Prototype commitment
+### v0.3 commitment
 
-The first compelling demo includes a **small, licensed phrase pack** and supports user-entered phrases. It does not claim exhaustive phrase search.
+The compact pack contains **8 explicit authored fixtures**. The worker additionally composes **151 authored ordinary performance-phrase building blocks** from checked-in word pronunciations at startup. Selected phrases made only of known words can also be represented compositionally. RhymeGraph does not claim exhaustive phrase search, real-world phrase frequency, or a complete user-managed phrase library.
 
 Phrase representation concatenates pronunciations while retaining word boundaries. Alignment may cross those boundaries, allowing a single word to match several words. Ranking includes:
 
@@ -459,25 +468,29 @@ Phrase representation concatenates pronunciations while retaining word boundarie
 - Semantic fit.
 - Boundary awkwardness penalty.
 
-Only attested or deliberately curated phrases are shipped. Arbitrary Cartesian combinations of words are not precomputed.
+Only explicit, deliberately authored phrases are shipped or composed. Arbitrary Cartesian combinations are not precomputed. The list is project-authored rather than extracted from lyrics, artist catalogues, or an n-gram corpus; it must still be judged for grammar and usefulness.
 
-The phrase source is a launch-blocking data decision because many obvious lyric and n-gram corpora have unsuitable redistribution terms.
+A larger phrase source remains a data and evidence decision because many obvious lyric and n-gram corpora have unsuitable redistribution terms. User-local phrase management is preferable to quietly introducing an unreviewed corpus.
 
 ## 14. Dialect and pronunciation
 
-Dialect is part of the data model from the first commit even though the initial data pack is General American.
+Dialect is part of the data model even though the source pronunciation pack remains CMU-based General American.
 
-### First release
+### v0.3 implementation
 
-- Label the initial pronunciation basis clearly.
+- Label the CMU-based US pronunciation basis clearly.
 - Permit alternate pronunciations already present in CMUdict.
-- Let users choose among pronunciations for ambiguous words.
-- Allow a local pronunciation override using phoneme selection or “sounds like” input.
-- Mark G2P results as estimated.
+- Persist a choice between General American and **UK non-rhotic · beta**.
+- For the beta, conservatively drop post-vocalic `R` when no following vowel licenses linking `R`, and map only unstressed rhotic `ER0` to schwa/`AH0`.
+- Preserve stressed `ER` so NURSE remains distinct from STRUT—for example, `bird` must not become `bud`.
+- Keep authored performance forms and UK/reference tags transparent.
+- Do not describe SUBTLEX-US utility or a rhoticity transform as a complete UK dialect pack.
+
+Pronunciation selection UI, user overrides, and G2P remain future work. If G2P is introduced, estimated results must be labelled.
 
 ### Later dialect packs
 
-- UK English is the first additional target.
+- A reviewed UK/regional profile is the first additional full target beyond the beta transform.
 - Packs provide pronunciations plus merger/equivalence configuration.
 - A personal profile may override individual words without inventing a false universal accent label.
 - Dialect differences affect sound ranking but not semantic embeddings.
@@ -543,29 +556,29 @@ TTS initially serves pronunciation audition and dialect comparison. Ordinary TTS
 - No voice training or retention without separate, informed consent.
 - A one-action delete control removes stored audio and derived timing features.
 
-## 17. MVP definition
+## 17. Prototype scope
 
-### Included in v0.1
+### Design target represented in the current prototype
 
 - Desktop-first responsive web application.
 - Scratchpad with active-line context and selection.
-- 30,000–60,000 useful English words, filtered from a larger pronunciation lexicon.
-- General American pronunciation with alternate pronunciation selection.
+- 54,132 compact English words and 59,783 pronunciations, filtered from CMUdict using WordNet/SUBTLEX and transparent authored additions.
+- CMU-based General American pronunciation plus a conservative selectable UK non-rhotic beta; richer pronunciation selection remains incomplete.
 - Immediate phonetic retrieval and detailed component scoring.
-- Browser semantic inference using a pinned quantized embedding model.
+- Browser semantic inference using a pinned quantized embedding model and optional full-vocabulary int8 word-document index.
 - Continue, Bridge, and Pivot intents.
 - Multi-pin family inference.
-- Local graph plus synchronized ranked list.
-- Sound/meaning, adventurousness, rhythm, syllable, part-of-speech, and frequency controls.
+- Family-first explorer plus optional local phonetic kNN map and synchronized ranked list.
+- Sound/meaning and Reach controls, a dialect switch, and syllable/part-of-speech filters; rhythm/frequency controls remain design ideas.
 - Candidate explanations and pronunciation display.
-- Insert, replace, pin, expand, dismiss, backtrack, and undo.
+- Inspect, insert/replace the selected span, pin, expand, backtrack, and insertion undo; dismiss/evaluation feedback remains future work.
 - Local project persistence with no account.
-- A small, legally distributable phrase demonstration if the data audit succeeds.
+- Eight pack phrase fixtures plus 151 project-authored ordinary performance-phrase building blocks, with no scraped lyric corpus.
 
 ### Deferred
 
-- Comprehensive phrase search.
-- UK dialect pack.
+- Comprehensive/user-managed phrase search.
+- A full audited UK/regional pronunciation pack beyond the non-rhotic beta.
 - Automatic verse-wide internal-rhyme colouring.
 - Accounts, sync, and collaboration.
 - Personal learned ranking.
@@ -580,7 +593,7 @@ TTS initially serves pronunciation audition and dialect comparison. Ordinary TTS
 - One local project format.
 - One active sound anchor plus at most four pinned anchors (five total).
 - At most 24 visible candidate nodes.
-- No server required for ordinary v0.1 use.
+- No server required for ordinary prototype use.
 
 ## 18. Demo acceptance script
 
@@ -599,58 +612,61 @@ The prototype is compelling only if a reviewer can complete this sequence withou
 11. Reload the application and recover the local draft and pins.
 12. Disconnect the network after assets are cached and repeat the core flow.
 
+This is an acceptance target rather than a statement that all twelve steps currently pass. In particular, no service worker is shipped, so step 12 is not guaranteed; semantic refinement and map continuity also require observed usability testing.
+
 ## 19. Proposed technical architecture
 
-### Repository shape
+### As-built v0.3 repository shape
 
 ```text
 rhymegraph/
-  apps/
-    web/                  # TypeScript UI and browser workers
-  packages/
-    domain/               # shared types and query contracts
-    phonetics/            # alignment, scoring, family inference
-    ranking/              # score fusion and diversification
-    graph/                # graph projection and stable layout
-    data-runtime/         # shard loading, indexes, provenance
-  pipeline/
-    ingest/               # source-specific importers
-    build/                # normalization and asset generation
-    evaluate/             # benchmark and ranking reports
-  data/
-    manifests/            # versions, hashes, licences, attribution
-    fixtures/             # small test-only lexical samples
-  docs/
-    decisions/            # architecture decision records
+  app/                    # Next.js UI, notices, and static-export shell
+  lib/
+    phonetics/            # alignment, indexed retrieval, dialect transform
+    phonetic-search/      # browser worker/client and authored phrase blocks
+    semantic/             # browser worker/client and int8 index runtime
+    search/               # semantic/phonetic late-fusion policy
+    explorer/             # deterministic local candidate graph
+  scripts/                # data/index builds, workers, Pages, evaluation
+  evaluation/             # provisional scenarios and evaluator
+  public/
+    data/                 # compact lexicon and optional semantic artefacts
+    models/               # pinned local model/tokenizer
+    workers/              # generated browser-worker bundles
+    licenses/             # redistributed licence texts
+  tests/                  # Node and Playwright checks
+  docs/                   # status, roadmap, diary, and screenshots
 ```
 
-### Initial technology choices
+### Current technology choices
 
-- TypeScript, React, and Vite for the application.
+- TypeScript, React, and Next.js static export for the application; Vite bundles only the workers.
 - Plain SVG/DOM graph rendering initially; 30 nodes do not justify a heavy graph engine.
-- Web Workers for semantic inference and expensive scoring.
+- Separate Web Workers for phonetic search and semantic inference/retrieval.
 - `@huggingface/transformers` with pinned ONNX model artifacts.
-- IndexedDB for drafts, settings, cached derived data, and optional session feedback.
-- Python for the offline lexical build/evaluation pipeline because the phonetics/NLP ecosystem is stronger there.
-- Vitest for unit/property tests and Playwright for the core interaction script.
+- localStorage for draft/settings and per-tab sessionStorage for explicitly started research capture; on Pages these are shared-origin, not path-isolated.
+- Node build scripts for lexicon, semantic-index, evaluation, and benchmark work.
+- Node's test runner through `tsx` for unit/data checks and Playwright for browser paths.
 
-These choices are defaults for speed, not permanent commitments. No backend, vector database, or WebGL renderer should be introduced until a measured need exists.
+These choices are defaults for speed, not permanent commitments. No backend, vector database, WebGL renderer, telemetry service, or proprietary runtime API should be introduced until a measured product need exists.
 
 ### Runtime flow
 
 ```text
-static lexical shards ───────┐
-phonetic indexes ────────────┼─ phonetic Worker ─ candidates + alignments
-query/pins/dialect ──────────┘                         │
-                                                      ├─ rank + diversify ─ UI
-context/concept ─ embedding Worker ─ semantic scores ─┘
+compact lexical pack ────────┐
+phonetic posting indexes ────┼─ phonetic Worker ─ exact scores + explanations
+anchors/pins/reach/dialect ──┘                         ▲
+                                                        │ semantic union
+context/concept ─ MiniLM query ─ local int8 index ──────┘
+                                                        │
+                                            late fuse + diversify ─ UI
 ```
 
 Semantic enhancement is progressive. A late semantic response carries a query revision ID and is discarded if the user has already changed the query.
 
 ### Versioning
 
-The following identifiers are persisted with a project/search snapshot:
+Reproducible reports and future portable project/search snapshots should carry:
 
 - Lexical data version.
 - Phonetic-cost configuration version.
@@ -671,10 +687,12 @@ Budgets are hypotheses to validate on representative mid-range hardware:
 - First visible result set: never blocked on semantic inference.
 - Core compressed lexical/index download: target under 10 MB.
 - Optional semantic model download: target under 35 MB quantized.
-- Optional quantized sense vectors/shards: target under 25 MB initial pack.
+- Optional quantized word-document vectors/index: target under 25 MB initial pack.
 - Browser memory after model load: target under 350 MB on desktop.
 
 If these budgets cannot be met, reduce vocabulary/sense-pack size or add on-demand shards before introducing a required backend.
+
+The current v0.3 verification snapshot passes 70/70 unit/data checks, whole-tree lint and TypeScript, evaluator, sound-benchmark, and semantic-index validation, 10/10 root Chromium production scenarios, and 12/12 `/RhymeGraph` Pages production scenarios, including the full Chromium path plus Firefox/WebKit core loops. Two unit/data cases cover artifact compatibility for the retained live prior Pages chunk; additional scorer cases protect inverted stress, Pivot intent, headroom, phrase coverage, and mixed-OOV families. These prove release mechanics and tested interactions, not the performance budgets above or recommendation usefulness.
 
 ## 21. Evaluation
 
@@ -736,6 +754,7 @@ Generated assets include a machine-readable provenance map. Do not scrape commer
 ### Draft privacy
 
 - Drafts are local by default.
+- The draft field disables browser spellcheck; browser extensions, keyboards, and input methods remain outside the application's request boundary.
 - Telemetry is off in development and opt-in if introduced publicly.
 - Evaluation feedback can be submitted without submitting the entire draft.
 - Any event schema must distinguish displayed, previewed, inserted, retained, dismissed, and undone suggestions.
@@ -761,7 +780,7 @@ Progressively load semantic capability, shard vectors, retain phonetic-only oper
 
 ### CMUdict creates a false claim of universal English
 
-Label it honestly, model dialect from the start, accept pronunciation overrides, and prioritize a UK pack after the core loop.
+Label it honestly, keep the broad non-rhotic transform in beta, accept pronunciation overrides, and prioritize reviewed word-specific UK/regional data after the core loop.
 
 ### Slang, spellings, and names fail
 
@@ -835,9 +854,9 @@ Unless review changes them, implementation should proceed with these assumptions
 4. Semantic inference runs locally in the browser.
 5. The first version requires no user account.
 6. The first version requires no proprietary runtime API.
-7. General American is the initial labelled pronunciation pack; the schema is dialect-aware.
+7. CMU-based General American is the labelled source pack; a selectable UK non-rhotic beta is an explicitly limited scoring profile, not a full dialect pack.
 8. Multi-pin family inference is MVP, not an enhancement.
-9. Phrase support appears in the demo through an audited limited pack, not exhaustive generation.
+9. Phrase support uses 8 fixtures and 151 transparent project-authored building blocks, not exhaustive generation or scraped lyrics.
 10. Voice follows proof of typed recommendation quality.
 
 ## 26. Questions for review
@@ -863,7 +882,8 @@ If target writers repeatedly retain those suggestions and traverse the space, co
 - [Transformers.js WebGPU guide](https://huggingface.co/docs/transformers.js/guides/webgpu): feature extraction and browser speech-recognition examples.
 - [`all-MiniLM-L6-v2` model](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2): baseline semantic embedding model; Apache 2.0 licence.
 - [CMUdict](https://github.com/cmusphinx/cmudict): initial General American pronunciation source.
-- [Open English WordNet](https://github.com/globalwordnet/english-wordnet): definitions and lexical graph; CC BY 4.0.
+- [WordNet](https://wordnet.princeton.edu/): lexical metadata, primary gloss material, and bounded local definitions used through `wordnet-db`.
+- [SUBTLEX-US](https://www.ugent.be/pp/experimentele-psychologie/en/research/documents/subtlexus): build-time spoken-frequency coverage and utility, not pronunciation or dialect data.
 - [PanPhon](https://github.com/dmort27/panphon): reference for articulatory-feature distance; MIT licence.
 
 These references establish feasibility, not final dependency selection. Every dependency and derived data asset still requires a pinned version and distribution audit before release.

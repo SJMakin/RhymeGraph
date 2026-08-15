@@ -1,3 +1,4 @@
+import { copyFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { defineConfig, type Plugin } from "vite";
 
@@ -29,6 +30,23 @@ function avoidMistralKeyFalsePositive(): Plugin {
   };
 }
 
+function writeCurrentWorkerAliases(): Plugin {
+  return {
+    name: "write-current-worker-aliases",
+    async writeBundle(options, bundle) {
+      const outputDirectory = options.dir;
+      if (!outputDirectory) throw new Error("Worker build requires an output directory.");
+      for (const output of Object.values(bundle)) {
+        if (output.type !== "chunk" || !output.isEntry) continue;
+        await copyFile(
+          resolve(outputDirectory, output.fileName),
+          resolve(outputDirectory, `${output.name}.js`),
+        );
+      }
+    },
+  };
+}
+
 const configuredBasePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 const basePath = configuredBasePath
   ? `/${configuredBasePath.replace(/^\/+|\/+$/g, "")}`
@@ -37,14 +55,16 @@ const basePath = configuredBasePath
 export default defineConfig({
   base: `${basePath}/workers/`,
   publicDir: false,
-  plugins: [avoidMistralKeyFalsePositive()],
+  plugins: [avoidMistralKeyFalsePositive(), writeCurrentWorkerAliases()],
   define: {
     "process.env.NEXT_PUBLIC_BASE_PATH": JSON.stringify(basePath),
   },
   build: {
     target: "es2022",
     outDir: resolve(import.meta.dirname, "../public/workers"),
-    emptyOutDir: true,
+    // Versioned entries remain available for already-open tabs across deploys.
+    // The unversioned aliases are refreshed for pre-v0.3 clients.
+    emptyOutDir: false,
     minify: "esbuild",
     sourcemap: false,
     rollupOptions: {
@@ -54,7 +74,7 @@ export default defineConfig({
       },
       output: {
         format: "es",
-        entryFileNames: "[name].js",
+        entryFileNames: "[name].v3.js",
         chunkFileNames: "chunks/[name]-[hash].js",
         assetFileNames: "assets/[name]-[hash][extname]",
       },

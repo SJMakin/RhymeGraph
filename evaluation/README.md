@@ -51,7 +51,7 @@ Run the package command:
 
 ```text
 npm run evaluate
-node --experimental-strip-types scripts/evaluate.mjs --pretty --out outputs/evaluation-report.json
+npx tsx scripts/evaluate.mjs --pretty --out outputs/evaluation-report.json
 ```
 
 The report compares two deterministic scorers over each scenario's
@@ -59,21 +59,23 @@ machine-assisted provisional candidate pool:
 
 1. `stressed-vowel-suffix-v1`: exact primary-stressed-vowel identity plus the
    shared ARPAbet suffix length; no learned weights or semantic data.
-2. `rhymegraph-phonetic-v0.1`: the current engine with sound weight `1`, other
+2. `rhymegraph-phonetic-v0.3`: the current engine with sound weight `1`, other
    weights `0`, and no phonetic cutoff.
 
 It reports nDCG@3, nDCG@10, first keep-worthy reciprocal rank, top-three
 unrelated rate, coverage, per-scenario rankings, and dataset/engine/evaluator hashes.
-These are **unreviewed development-pool reranking** metrics. They do not measure
-human judgement or retrieval from the full 35k-word lexicon. An unknown anchor
-counts as zero in the all-scenario
-aggregate and is also separated in covered-only metrics. Reports record intent
-and pin-count distributions plus maximum anchor count so future fixture edits
-cannot silently reduce path coverage.
+These are **unreviewed development-pool reranking** metrics. The evaluator loads
+pronunciations and metadata from the current 54,132-word compact pack (plus 8
+explicit fixtures), but both scorers rank only each scenario's provisional
+labelled candidate pool. The report therefore measures neither human judgement
+nor retrieval from the full pack. An unknown anchor counts as zero in the
+all-scenario aggregate and is also separated in covered-only metrics. Reports
+record intent and pin-count distributions plus maximum anchor count so future
+fixture edits cannot silently reduce path coverage.
 
 JSON is written to the ignored `outputs/evaluation-report.json` by default.
 `--out PATH` chooses another file, `--stdout` emits machine-readable JSON
-instead, and `--pretty` only changes formatting. `npm run evaluate -- --check`
+instead, and `--pretty` only changes formatting. `npm run evaluate:check`
 validates the schema, split metadata, revisions, and declared lexicon coverage
 without writing a report; validation failures exit non-zero for CI.
 
@@ -84,14 +86,18 @@ Run a quick local benchmark with the default manifest, or the roadmap's fuller
 
 ```text
 npm run benchmark:sound
-node --experimental-strip-types scripts/benchmark-sound.mjs --iterations 30 --warmup 3 --device "Desktop reference" --power-profile "AC, balanced"
+npx tsx scripts/benchmark-sound.mjs --iterations 30 --warmup 3 --device "Desktop reference" --power-profile "AC, balanced"
 ```
 
 The benchmark records Node/V8, OS, architecture, CPU, logical cores, memory,
 device label, power-profile label, lexicon/scenario revisions, query set,
 warm-ups, timed passes, initialization stages, pair-comparison latency,
-exhaustive recommendation latency, and process memory. It makes no network
-requests and uses the same lexicon conversion and engine as the browser worker.
+bounded indexed-recommendation latency, and process memory. It makes no network
+requests and uses the same lexicon conversion, generated performance-phrase
+layer, and engine as the browser worker. Recommendation timing uses the v0.3
+browser-default sound profile (UK non-rhotic beta, 48% reach, 8% utility),
+which is stamped into the report; it does not measure semantic retrieval or a
+writer-adjusted control state.
 
 Do not compare reports whose dataset revisions, runtime/device manifests,
 power profiles, warm-ups, or query sets differ as if they were the same

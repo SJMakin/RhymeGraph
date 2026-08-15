@@ -1,7 +1,9 @@
 import {
   isSemanticWorkerEvent,
   type SemanticErrorEvent,
+  type SemanticIndexSummary,
   type SemanticReadyEvent,
+  type SemanticRetrievalHit,
   type SemanticScore,
   type SemanticWorkerEvent,
   type SemanticWorkerRequest,
@@ -11,14 +13,14 @@ import { withBasePath } from "../public-path";
 type SemanticEventListener = (event: SemanticWorkerEvent) => void;
 
 interface PendingRequest<T> {
-  kind: "init" | "score";
+  kind: "init" | "score" | "retrieve";
   resolve(value: T): void;
   reject(reason: Error): void;
 }
 
 export class SemanticRequestSupersededError extends Error {
   constructor() {
-    super("Semantic score request was superseded by a newer request.");
+    super("Semantic request was superseded by a newer request of the same kind.");
     this.name = "SemanticRequestSupersededError";
   }
 }
@@ -29,13 +31,14 @@ export class SemanticClient {
   private readonly pending = new Map<number, PendingRequest<unknown>>();
   private nextRequestId = 1;
   private latestScoreRequestId: number | undefined;
+  private latestRetrieveRequestId: number | undefined;
   private readyPromise: Promise<SemanticReadyEvent> | undefined;
   private disposed = false;
 
   constructor(worker?: Worker) {
     this.worker =
       worker ??
-      new Worker(withBasePath("/workers/semantic.worker.js"), {
+      new Worker(withBasePath("/workers/semantic.worker.v3.js"), {
         type: "module",
         name: "rhymegraph-semantic",
       });
@@ -86,6 +89,45 @@ export class SemanticClient {
         candidates: [...candidates],
       };
     });
+  }
+
+  /**
+   * Searches the checked-in whole-vocabulary index. The returned score uses one
+   * corpus-level calibration for every query; cosine is also retained so callers
+   * can evaluate or replace that calibration without reconstructing it.
+   */
+  async retrieve(
+    queryText: string,
+    options: { limit?: number; exclude?: readonly string[] } = {},
+  ): Promise<{ hits: SemanticRetrievalHit[]; index: SemanticIndexSummary }> {
+    this.assertActive();
+    // Let the explicitly requested index download overlap first-time model
+    // initialization. Both worker operations share the same extractor promise.
+    const initialization = this.init();
+
+    if (this.latestRetrieveRequestId !== undefined) {
+      const stale = this.pending.get(this.latestRetrieveRequestId);
+      if (stale?.kind === "retrieve") {
+        stale.reject(new SemanticRequestSupersededError());
+        this.pending.delete(this.latestRetrieveRequestId);
+      }
+    }
+
+    const retrieval = this.request<{ hits: SemanticRetrievalHit[]; index: SemanticIndexSummary }>(
+      "retrieve",
+      (requestId) => {
+        this.latestRetrieveRequestId = requestId;
+        return {
+          type: "retrieve",
+          requestId,
+          queryText,
+          limit: options.limit,
+          exclude: options.exclude ? [...options.exclude] : undefined,
+        };
+      },
+    );
+    const [, result] = await Promise.all([initialization, retrieval]);
+    return result;
   }
 
   dispose(): void {
@@ -140,12 +182,16 @@ export class SemanticClient {
     } else if (event.type === "result" && pending.kind === "score") {
       this.emit(event);
       pending.resolve(event.scores);
+    } else if (event.type === "retrieved" && pending.kind === "retrieve") {
+      this.emit(event);
+      pending.resolve({ hits: event.hits, index: event.index });
     } else {
       return;
     }
 
     this.pending.delete(event.requestId);
     if (event.requestId === this.latestScoreRequestId) this.latestScoreRequestId = undefined;
+    if (event.requestId === this.latestRetrieveRequestId) this.latestRetrieveRequestId = undefined;
   };
 
   private readonly handleWorkerError = (event: ErrorEvent): void => {
@@ -161,6 +207,7 @@ export class SemanticClient {
     this.pending.clear();
     this.readyPromise = undefined;
     this.latestScoreRequestId = undefined;
+    this.latestRetrieveRequestId = undefined;
   };
 }
 

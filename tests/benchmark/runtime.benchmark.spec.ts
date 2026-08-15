@@ -83,7 +83,7 @@ function normalizeExternalURL(value: string | undefined) {
 }
 
 function isSemanticResource(url: string) {
-  return /\/models\/|semantic\.worker|\.onnx(?:$|\?)|\/workers\/assets\/.*\.(?:wasm|mjs)(?:$|\?)/.test(url);
+  return /\/models\/|\/data\/semantic-index\.|semantic\.worker|\.onnx(?:$|\?)|\/workers\/assets\/.*\.(?:wasm|mjs)(?:$|\?)/.test(url);
 }
 
 class PlaywrightRequestRecorder {
@@ -355,14 +355,14 @@ async function runLoad(
   await page.goto(benchmarkEntryURL, { waitUntil: "domcontentloaded" });
   const domReadyMs = elapsed(startedAt);
 
-  const soundReady = page.getByText(/35,[0-9]{3} words local/)
+  const soundReady = page.getByText(/[0-9]{2,3},[0-9]{3} terms local/)
     .waitFor({ state: "visible" })
     .then(() => elapsed(startedAt));
   let meaningReady = phase === "repeat"
     ? waitForMeaningReady(page, startedAt)
     : undefined;
   let combinedReady = phase === "repeat"
-    ? page.getByText("Sound and meaning combined on this device", { exact: true })
+    ? page.locator(".engine-status").getByText(/^Sound \+ meaning searched across [\d,]+ local terms$/)
       .waitFor({ state: "visible" })
       .then(() => elapsed(startedAt))
     : undefined;
@@ -377,7 +377,7 @@ async function runLoad(
     const beforeOptInWindow = await summarizeWindowResources(page);
     expect(beforeOptInWindow.windowObservedSemanticRequests).toBe(0);
     meaningReady = waitForMeaningReady(page, startedAt);
-    combinedReady = page.getByText("Sound and meaning combined on this device", { exact: true })
+    combinedReady = page.locator(".engine-status").getByText(/^Sound \+ meaning searched across [\d,]+ local terms$/)
       .waitFor({ state: "visible" })
       .then(() => elapsed(startedAt));
     await page.getByRole("button", { name: "Enable meaning" }).click();

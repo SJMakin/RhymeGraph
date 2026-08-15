@@ -1,6 +1,6 @@
 const RESEARCH_STORAGE_KEY = "rhymegraph.research.session.v1";
 const SCHEMA_VERSION = "1.0.0";
-const APP_VERSION = "0.2.0";
+const APP_VERSION = "0.3.0";
 const MAX_EVENTS = 500;
 const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
@@ -68,6 +68,7 @@ export interface ResearchExportContext {
   meaningMix: number;
   adventurousness: number;
   meaningState: "idle" | "loading" | "ready" | "error";
+  dialect?: "en-US" | "en-GB";
 }
 
 export interface ResearchExport {
@@ -288,6 +289,7 @@ function safeContext(context: ResearchExportContext): ResearchExportContext {
     meaningMix: safePercentage(context.meaningMix),
     adventurousness: safePercentage(context.adventurousness),
     meaningState: isOneOf(context.meaningState, MEANING_STATES) ? context.meaningState : "idle",
+    dialect: context.dialect === "en-US" || context.dialect === "en-GB" ? context.dialect : undefined,
   };
 }
 

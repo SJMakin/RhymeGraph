@@ -2,6 +2,8 @@ export type Stress = 0 | 1 | 2;
 
 export type RecommendationIntent = "continue" | "bridge" | "pivot";
 
+export type PerformanceDialect = "en-US" | "en-GB";
+
 export type RelationshipLabel =
   | "full-rhyme"
   | "assonance"
@@ -58,10 +60,14 @@ export interface RhymeComponents {
   consonance: number;
   /** Similarity of the final coda after the last vowel. */
   coda: number;
-  /** Whole rhyme-tail alignment from the last primary stress onward. */
+  /** Whole selected suffix-window alignment. */
   fullTail: number;
   /** Syllable stress-sequence compatibility. */
   stress: number;
+  /** Salient suffix material covered by the selected window pair. */
+  coverage: number;
+  /** Compatibility of the selected window syllable counts. */
+  balance: number;
   /** Late-fused phonetic score. */
   phonetic: number;
 }
@@ -91,6 +97,12 @@ export interface RecommendationRequest {
   limit?: number;
   exclude?: readonly string[];
   minPhonetic?: number;
+  /** 0 = tight continuations; 1 = deliberately looser neighbouring families. */
+  reach?: number;
+  /** Conservative performance-pronunciation transform used during scoring. */
+  dialect?: PerformanceDialect;
+  /** Diagnostic escape hatch for retrieval-recall evaluation. */
+  candidatePool?: "indexed" | "exhaustive";
   weights?: Partial<{
     sound: number;
     meaning: number;

@@ -9,15 +9,19 @@ import {
   BrainCircuit,
   Check,
   ChevronDown,
+  CircleAlert,
   CircleHelp,
   CornerDownLeft,
   Download,
   Focus,
   Gauge,
   History,
+  LayoutGrid,
   List,
   Map as MapIcon,
+  Maximize2,
   Mic2,
+  Minimize2,
   Network,
   Pin,
   RotateCcw,
@@ -46,6 +50,7 @@ import {
   type CandidateView,
   type RelationshipKind,
 } from "../lib/demo-data";
+import { buildLocalCandidateGraph } from "../lib/explorer/local-graph";
 import type { PhoneticSearchClient, SearchCandidate } from "../lib/phonetic-search";
 import {
   createLocalResearchSession,
@@ -55,11 +60,16 @@ import {
   type ResearchEventInput,
 } from "../lib/research/session";
 import type { SemanticClient } from "../lib/semantic";
+import { createHybridSearchPolicy, normalizeCandidateText } from "../lib/search/hybrid";
 
 type Intent = "continue" | "bridge" | "pivot";
+type Dialect = "en-US" | "en-GB";
 type EngineStatus = "loading" | "ready" | "error";
 type SemanticStatus = "idle" | "loading" | "ready" | "error";
 type MobilePanel = "write" | "explore";
+type ResultView = "family" | "map" | "list";
+type SaveStatus = "pending" | "saved" | "error";
+type FamilyChannel = "locked" | "vowel" | "consonant" | "phrase" | "meaning";
 type SemanticTrigger = NonNullable<Extract<ResearchEventInput, { type: "engine" }>["trigger"]>;
 
 interface AnchorRange {
@@ -69,13 +79,27 @@ interface AnchorRange {
 
 const STORAGE_KEY = "rhymegraph.project.v1";
 const SEMANTIC_PREFERENCE_KEY = "rhymegraph.semantic.enabled.v1";
-const SEMANTIC_DOWNLOAD_LABEL = "about 46 MiB";
+const SEMANTIC_DOWNLOAD_LABEL = "about 69 MiB";
 const MAX_DRAFT_LENGTH = 100_000;
 const MAX_TITLE_LENGTH = 120;
 const MAX_PROJECT_TOKEN_LENGTH = 96;
 const MAX_PIN_COUNT = 4;
 const MAX_BREADCRUMB_COUNT = 8;
 const DEMO_BY_WORD = new Map(DEMO_CANDIDATES.map((candidate) => [candidate.word, candidate]));
+const FAMILY_CARD_LIMIT = 4;
+
+const FAMILY_CHANNELS: Array<{
+  id: FamilyChannel;
+  name: string;
+  shortName: string;
+  description: string;
+}> = [
+  { id: "locked", name: "Locked landings", shortName: "Locked", description: "Full tails and closest closures" },
+  { id: "vowel", name: "Vowel & slant", shortName: "Vowel", description: "Shared colour with room to bend" },
+  { id: "consonant", name: "Consonant echoes", shortName: "Consonant", description: "Codas, consonant skeletons and rough texture" },
+  { id: "phrase", name: "Phrase & mosaic", shortName: "Phrase", description: "Cross-word and multi-beat landings" },
+  { id: "meaning", name: "Meaning & sideways", shortName: "Sideways", description: "Conceptual turns that keep the pocket" },
+];
 
 const RELATION_ACCENT: Record<RelationshipKind, string> = {
   "full-tail": "var(--accent-lime)",
@@ -101,11 +125,58 @@ function clamp(value: number, min = 0, max = 100) {
 
 function relationshipFor(result: SearchCandidate): RelationshipKind {
   if (result.labels.includes("semantic-bridge")) return "semantic";
+  if (result.semantic >= 68 && result.semantic >= result.phonetic + 8) return "semantic";
   if (result.labels.includes("mosaic")) return "mosaic";
   if (result.labels.includes("full-rhyme")) return "full-tail";
   if (result.labels.includes("assonance") && result.assonance >= result.consonance) return "assonance";
   if (result.labels.includes("consonance")) return "consonance";
   return "slant";
+}
+
+function candidateFitsFamily(candidate: CandidateView, channel: FamilyChannel) {
+  const evidence = `${candidate.reasons.join(" ")} ${(candidate.tags ?? []).join(" ")}`.toLowerCase();
+  if (channel === "phrase") return Boolean(candidate.phrase || candidate.relation === "mosaic");
+  if (channel === "meaning") {
+    return candidate.relation === "semantic" || (candidate.meaning >= 65 && candidate.meaning >= candidate.sound - 8);
+  }
+  if (channel === "locked") return candidate.relation === "full-tail";
+  if (channel === "vowel") {
+    return candidate.relation === "assonance"
+      || candidate.relation === "slant"
+      || /\b(vowel|assonance|slant)\b/.test(evidence);
+  }
+  if (channel === "consonant") {
+    return candidate.relation === "consonance"
+      || /\b(coda|consonant|internal)\b/.test(evidence);
+  }
+  return false;
+}
+
+function familyEvidence(candidate: CandidateView, channel: FamilyChannel) {
+  const patterns: Record<FamilyChannel, RegExp> = {
+    locked: /full|tail|ending|closure|strongest/i,
+    vowel: /vowel|assonance|slant/i,
+    consonant: /coda|consonant|internal/i,
+    phrase: /phrase|mosaic|cross-word|multi/i,
+    meaning: /meaning|semantic|concept|context/i,
+  };
+  return candidate.reasons.find((reason) => patterns[channel].test(reason))
+    ?? candidate.reasons[0]
+    ?? RELATION_LABEL[candidate.relation];
+}
+
+function meaningState(value: number, enabled: boolean) {
+  if (!enabled || value === 0) return "Sound only";
+  if (value < 35) return "Sound-led";
+  if (value < 66) return "Balanced";
+  return "Meaning-led";
+}
+
+function reachState(value: number) {
+  if (value < 25) return "Close";
+  if (value < 55) return "Open";
+  if (value < 80) return "Wide";
+  return "Far out";
 }
 
 function humanizeReason(reason: string) {
@@ -117,7 +188,7 @@ function humanizeReason(reason: string) {
 
 function fromSearchCandidate(result: SearchCandidate): CandidateView {
   const seeded = DEMO_BY_WORD.get(result.word);
-  const relation = seeded?.relation ?? relationshipFor(result);
+  const relation = relationshipFor(result);
   return {
     id: result.id,
     word: result.word,
@@ -215,6 +286,7 @@ function restoreProject(value: unknown) {
     breadcrumbs: restoredBreadcrumbs.length > 0
       ? restoredBreadcrumbs
       : anchor ? [anchor] : [],
+    dialect: value.dialect === "en-US" ? "en-US" as const : "en-GB" as const,
   };
 }
 
@@ -222,34 +294,6 @@ function getActiveLine(text: string, range: AnchorRange) {
   const lineStart = text.lastIndexOf("\n", Math.max(0, range.start - 1)) + 1;
   const nextBreak = text.indexOf("\n", range.end);
   return text.slice(lineStart, nextBreak === -1 ? text.length : nextBreak);
-}
-
-function normalizeSemanticScores(scores: Array<{ text: string; score: number }>) {
-  if (scores.length === 0) return new Map<string, number>();
-  const values = scores.map((item) => item.score);
-  const low = Math.min(...values);
-  const high = Math.max(...values);
-  const span = high - low || 1;
-  return new Map(scores.map((item) => [item.text, clamp(((item.score - low) / span) * 100)]));
-}
-
-function graphPosition(candidate: CandidateView, index: number) {
-  const baseAngles: Record<RelationshipKind, number> = {
-    "full-tail": 218,
-    assonance: 282,
-    consonance: 162,
-    slant: 92,
-    mosaic: 58,
-    semantic: 4,
-  };
-  const hash = [...candidate.word].reduce((sum, character) => sum + character.charCodeAt(0), 0);
-  const wobble = ((hash % 31) - 15) + ((index % 3) - 1) * 7;
-  const angle = ((baseAngles[candidate.relation] + wobble) * Math.PI) / 180;
-  const radius = 23 + (100 - candidate.overall) * .31 + (index % 4) * 1.9;
-  return {
-    x: clamp(50 + Math.cos(angle) * radius, 9, 89),
-    y: clamp(47 + Math.sin(angle) * radius * .78, 11, 84),
-  };
 }
 
 function ScoreBar({ label, value, tone }: { label: string; value: number; tone: string }) {
@@ -280,6 +324,7 @@ export function RhymeStudio() {
     end: initialAnchorStart + "gravity".length,
   });
   const [intent, setIntent] = useState<Intent>("continue");
+  const [dialect, setDialect] = useState<Dialect>("en-GB");
   const [concept, setConcept] = useState("money and pressure");
   const [meaningBalance, setMeaningBalance] = useState(34);
   const [adventurousness, setAdventurousness] = useState(48);
@@ -290,6 +335,7 @@ export function RhymeStudio() {
   const [breadcrumbs, setBreadcrumbs] = useState<string[]>(["gravity"]);
   const [candidates, setCandidates] = useState<CandidateView[]>(DEMO_CANDIDATES);
   const [baseCandidates, setBaseCandidates] = useState<CandidateView[]>(DEMO_CANDIDATES);
+  const [baseCandidatesRevision, setBaseCandidatesRevision] = useState(0);
   const [selectedId, setSelectedId] = useState("salary");
   const [engineStatus, setEngineStatus] = useState<EngineStatus>("loading");
   const [engineProgress, setEngineProgress] = useState(8);
@@ -304,13 +350,17 @@ export function RhymeStudio() {
     }),
   );
   const [statusMessage, setStatusMessage] = useState("Loading local sound map");
-  const [viewMode, setViewMode] = useState<"map" | "list">("map");
+  const [viewMode, setViewMode] = useState<ResultView>("family");
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("write");
+  const [exploreFocused, setExploreFocused] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("pending");
   const [undoState, setUndoState] = useState<{
     draft: string;
     range: AnchorRange;
     anchor: string;
+    breadcrumbs: string[];
     inserted: string;
     relation: RelationshipKind;
     rank: number;
@@ -332,7 +382,8 @@ export function RhymeStudio() {
   const pendingSemanticTrigger = useRef<SemanticTrigger>("preference");
   const researchRef = useRef<LocalResearchSession | null>(null);
   const soundStartedAt = useRef(0);
-  const searchRevision = useRef(0);
+  const soundSearchRevision = useRef(0);
+  const hybridSearchRevision = useRef(0);
   const semanticRerankInputRef = useRef<{
     source: CandidateView[];
     query: string;
@@ -343,12 +394,7 @@ export function RhymeStudio() {
     researchRef.current?.record(event);
   }, []);
 
-  const selected = useMemo(
-    () => candidates.find((candidate) => candidate.id === selectedId) ?? candidates[0],
-    [candidates, selectedId],
-  );
-
-  const visibleCandidates = useMemo(() => {
+  const filteredCandidates = useMemo(() => {
     return candidates
       .filter((candidate) =>
         syllableFilter === "any" ||
@@ -356,9 +402,56 @@ export function RhymeStudio() {
           ? candidate.syllables >= 4
           : candidate.syllables === Number(syllableFilter)),
       )
-      .filter((candidate) => partOfSpeech === "any" || candidate.tags?.includes(partOfSpeech))
-      .slice(0, 18);
+      .filter((candidate) => partOfSpeech === "any" || candidate.tags?.includes(partOfSpeech));
   }, [candidates, syllableFilter, partOfSpeech]);
+
+  const visibleCandidates = useMemo(
+    () => filteredCandidates.slice(0, 18),
+    [filteredCandidates],
+  );
+  const filtersActive = syllableFilter !== "any" || partOfSpeech !== "any";
+
+  const localGraph = useMemo(
+    () => buildLocalCandidateGraph(visibleCandidates.map((candidate) => ({
+      id: candidate.id,
+      word: candidate.word,
+      pronunciation: candidate.pronunciation,
+      overall: candidate.overall,
+      sound: candidate.sound,
+    }))),
+    [visibleCandidates],
+  );
+  const graphNodeById = useMemo(
+    () => new Map(localGraph.nodes.map((node) => [node.id, node])),
+    [localGraph],
+  );
+
+  const selected = useMemo(
+    () => filteredCandidates.find((candidate) => candidate.id === selectedId)
+      ?? filteredCandidates[0],
+    [filteredCandidates, selectedId],
+  );
+  const effectiveMeaningBalance = semanticEnabled && semanticStatus === "ready"
+    ? meaningBalance
+    : 0;
+  const meaningControlState = semanticStatus === "error"
+    ? "Unavailable"
+    : semanticStatus === "loading"
+      ? "Loading"
+      : meaningState(effectiveMeaningBalance, effectiveMeaningBalance > 0);
+
+  const familyGroups = useMemo(
+    () => FAMILY_CHANNELS.map((channel) => {
+      const channelCandidates = filteredCandidates
+        .filter((candidate) => candidateFitsFamily(candidate, channel.id));
+      return {
+        ...channel,
+        total: channelCandidates.length,
+        candidates: channelCandidates.slice(0, FAMILY_CARD_LIMIT),
+      };
+    }),
+    [filteredCandidates],
+  );
 
   useEffect(() => {
     const resumeTimer = window.setTimeout(() => {
@@ -389,6 +482,7 @@ export function RhymeStudio() {
             setAnchor(restored.anchor);
             setAnchorRange(restored.anchorRange);
             setBreadcrumbs(restored.breadcrumbs);
+            setDialect(restored.dialect);
           }
         }
       } catch {
@@ -421,18 +515,38 @@ export function RhymeStudio() {
           anchor,
           anchorRange,
           breadcrumbs,
+          dialect,
         }),
       );
+      window.queueMicrotask(() => setSaveStatus("saved"));
     } catch {
-      window.queueMicrotask(() => setToast("Draft isn’t being saved on this device"));
+      window.queueMicrotask(() => {
+        setSaveStatus("error");
+        setToast("Draft isn’t being saved on this device");
+      });
     }
-  }, [draft, projectTitle, pins, anchor, anchorRange, breadcrumbs, hydrated]);
+  }, [draft, projectTitle, pins, anchor, anchorRange, breadcrumbs, dialect, hydrated]);
 
   useEffect(() => {
     let cancelled = false;
+    let soundInitializationSettled = false;
     let unsubscribePhonetic = () => {};
     soundStartedAt.current = performance.now();
     recordResearch({ type: "engine", engine: "sound", phase: "started" });
+
+    const failSoundInitialization = () => {
+      if (cancelled || soundInitializationSettled) return;
+      soundInitializationSettled = true;
+      setEngineStatus("error");
+      setEngineProgress(0);
+      setStatusMessage("Sound map unavailable · using the studio demo pack");
+      recordResearch({
+        type: "engine",
+        engine: "sound",
+        phase: "error",
+        durationMs: Math.round(performance.now() - soundStartedAt.current),
+      });
+    };
 
     void import("../lib/phonetic-search").then((phoneticModule) => {
       if (cancelled) return;
@@ -443,6 +557,7 @@ export function RhymeStudio() {
           setEngineProgress(Math.round(event.progress * 100));
           if (event.stage !== "searching") setStatusMessage("Preparing local pronunciation map");
         } else if (event.type === "ready") {
+          soundInitializationSettled = true;
           setEngineStatus("ready");
           setLexiconCount(event.words);
           setEngineProgress(100);
@@ -454,22 +569,10 @@ export function RhymeStudio() {
             durationMs: Math.round(performance.now() - soundStartedAt.current),
             itemCount: event.words,
           });
-        } else if (event.type === "error") {
-          setEngineStatus("error");
-          setStatusMessage("Using the studio demo pack");
-          recordResearch({
-            type: "engine",
-            engine: "sound",
-            phase: "error",
-            durationMs: Math.round(performance.now() - soundStartedAt.current),
-          });
         }
       });
-      void phonetic.init().catch(() => setEngineStatus("error"));
-    }).catch(() => {
-      setEngineStatus("error");
-      recordResearch({ type: "engine", engine: "sound", phase: "error" });
-    });
+      void phonetic.init().catch(failSoundInitialization);
+    }).catch(failSoundInitialization);
 
     return () => {
       cancelled = true;
@@ -480,6 +583,7 @@ export function RhymeStudio() {
   }, [recordResearch]);
 
   const releaseSemantic = useCallback(() => {
+    hybridSearchRevision.current += 1;
     semanticLifecycleRevision.current += 1;
     if (semanticAttemptRef.current) semanticAttemptRef.current.settled = true;
     semanticUnsubscribeRef.current();
@@ -536,7 +640,7 @@ export function RhymeStudio() {
           }
           setSemanticStatus("ready");
           setStatusMessage("Meaning ready · everything stays on this device");
-        } else if (event.type === "error") {
+        } else if (event.type === "error" && event.requestId === 0) {
           fail();
         }
       });
@@ -560,7 +664,9 @@ export function RhymeStudio() {
     releaseSemantic();
     setSemanticEnabled(false);
     setSemanticStatus("idle");
-    setCandidates(baseCandidates.slice(0, 30));
+    if (baseCandidatesRevision === soundSearchRevision.current) {
+      setCandidates(baseCandidates);
+    }
     setStatusMessage("Meaning off · sound search stays ready");
     try {
       window.localStorage.setItem(SEMANTIC_PREFERENCE_KEY, "false");
@@ -568,7 +674,7 @@ export function RhymeStudio() {
       // The in-memory preference still works for this session.
     }
     recordResearch({ type: "engine", engine: "meaning", phase: "disabled" });
-  }, [baseCandidates, recordResearch, releaseSemantic]);
+  }, [baseCandidates, baseCandidatesRevision, recordResearch, releaseSemantic]);
 
   const retrySemantic = useCallback(() => {
     releaseSemantic();
@@ -587,58 +693,104 @@ export function RhymeStudio() {
     return () => releaseSemantic();
   }, [releaseSemantic]);
 
-  const applySemanticRerank = useCallback(
-    async (query: string, source: CandidateView[], revision: number) => {
+  const applyHybridSearch = useCallback(
+    async (
+      query: string,
+      source: CandidateView[],
+      baseRevision: number,
+      hybridRevision: number,
+    ) => {
       const semantic = semanticRef.current;
-      if (!semantic || semanticStatus !== "ready" || source.length === 0 || !query.trim()) return;
+      const phonetic = phoneticRef.current;
+      if (!semantic || !phonetic || semanticStatus !== "ready" || source.length === 0 || !query.trim()) return;
+      const isCurrentGeneration = () => (
+        baseRevision === soundSearchRevision.current
+        && hybridRevision === hybridSearchRevision.current
+        && semanticRef.current === semantic
+      );
+      if (!isCurrentGeneration()) return;
+      if (meaningBalance <= 0) {
+        setCandidates(source);
+        setStatusMessage("Sound-only neighbourhood restored");
+        return;
+      }
       try {
-        const rawScores = await semantic.score(query, source.map((candidate) => candidate.word));
-        if (revision !== searchRevision.current || semanticRef.current !== semantic) return;
-        const semanticScores = normalizeSemanticScores(rawScores);
-        const soundWeight = (100 - meaningBalance) / 100;
-        const meaningWeight = meaningBalance / 100;
-        const reranked = source
-          .map((candidate) => {
-            const meaning = semanticScores.get(candidate.word) ?? candidate.meaning;
-            const overall = clamp(
-              candidate.sound * soundWeight * .88 + meaning * meaningWeight * .88 + candidate.flow * .12,
-            );
-            return {
-              ...candidate,
-              meaning: Math.round(meaning),
-              overall: Math.round(overall),
-              relation:
-                intent === "bridge" && meaning > candidate.sound
-                  ? ("semantic" as const)
-                  : candidate.relation,
-            };
-          })
-          .sort((a, b) => b.overall - a.overall || b.sound - a.sound)
-          .slice(0, 30);
-        setCandidates(reranked);
-        setStatusMessage("Sound and meaning combined on this device");
+        const anchors = [...new Set([anchor, ...pins])].slice(0, 5);
+        const excluded = [...new Set([...anchors, ...breadcrumbs.slice(0, -1)])];
+        setStatusMessage("Searching the whole local meaning map");
+        const retrieval = await semantic.retrieve(query, {
+          limit: 160,
+          exclude: excluded,
+        });
+        if (!isCurrentGeneration()) return;
+        const policy = createHybridSearchPolicy({
+          intent,
+          meaningMix: meaningBalance,
+          reach: adventurousness / 100,
+          semanticHits: retrieval.hits,
+        });
+        const results = await phonetic.search({
+          anchors,
+          intent,
+          limit: 120,
+          minPhonetic: policy.minPhonetic,
+          reach: adventurousness / 100,
+          dialect,
+          exclude: breadcrumbs.slice(0, -1),
+          semanticScores: policy.semanticScores,
+          weights: policy.weights,
+        });
+        if (!isCurrentGeneration()) return;
+        const semanticByTerm = new Map(
+          retrieval.hits.map((hit) => [normalizeCandidateText(hit.text), hit]),
+        );
+        const mapped = results.map(fromSearchCandidate).map((candidate) => {
+          const hit = semanticByTerm.get(normalizeCandidateText(candidate.word));
+          if (!hit) return candidate;
+          const semanticReason = `meaning strength · ${Math.round(hit.fusionScore * 100)} corpus-scaled`;
+          return {
+            ...candidate,
+            definition: hit.definition ?? candidate.definition,
+            reasons: [...new Set([semanticReason, ...candidate.reasons])].slice(0, 4),
+          };
+        });
+        setCandidates(mapped.length > 0 ? mapped : source);
+        setSelectedId((current) =>
+          mapped.some((candidate) => candidate.id === current)
+            ? current
+            : (mapped[0]?.id ?? source[0]?.id ?? ""),
+        );
+        setStatusMessage(
+          `Sound + meaning searched across ${retrieval.index.count.toLocaleString("en-GB")} local terms`,
+        );
       } catch (error) {
-        if (revision !== searchRevision.current || semanticRef.current !== semantic) return;
-        if (!(error instanceof Error && error.name === "SemanticRequestSupersededError")) {
+        if (!isCurrentGeneration()) return;
+        const superseded = error instanceof Error && (
+          error.name === "SemanticRequestSupersededError" || error.message.toLowerCase().includes("superseded")
+        );
+        if (!superseded) {
           setSemanticStatus("error");
-          setCandidates(source.slice(0, 30));
-          setStatusMessage("Meaning paused · sound results restored");
+          setCandidates(source);
+          setStatusMessage("Meaning search paused · sound results restored");
           recordResearch({ type: "engine", engine: "meaning", phase: "error" });
         }
       }
     },
-    [intent, meaningBalance, recordResearch, semanticStatus],
+    [adventurousness, anchor, breadcrumbs, dialect, intent, meaningBalance, pins, recordResearch, semanticStatus],
   );
 
   useEffect(() => {
-    const revision = ++searchRevision.current;
+    const revision = ++soundSearchRevision.current;
+    hybridSearchRevision.current += 1;
+    semanticRerankInputRef.current = null;
     const phonetic = phoneticRef.current;
     if (!phonetic || engineStatus === "loading") return;
 
     if (!anchor.trim()) {
       const emptyTimer = window.setTimeout(() => {
-        if (revision !== searchRevision.current) return;
+        if (revision !== soundSearchRevision.current) return;
         setBaseCandidates([]);
+        setBaseCandidatesRevision(revision);
         setCandidates([]);
         setSelectedId("");
         setSearching(false);
@@ -650,17 +802,21 @@ export function RhymeStudio() {
     const timer = window.setTimeout(() => {
       const anchors = [...new Set([anchor, ...pins])].slice(0, 5);
       const activeLine = getActiveLine(draft, anchorRange);
-      const query = intent === "bridge" && concept.trim() ? concept : activeLine;
+      const query = intent === "bridge" && concept.trim()
+        ? `${concept.trim()}. ${activeLine}`
+        : activeLine;
       setSearching(true);
       setStatusMessage("Tracing the next neighbourhood");
-      const minPhonetic = clamp(.68 - adventurousness * .0044, .24, .68);
+      const minPhonetic = clamp(.42 - adventurousness * .0024, .18, .42);
       const searchStartedAt = performance.now();
       void phonetic
         .search({
           anchors,
           intent,
-          limit: 72,
+          limit: 96,
           minPhonetic,
+          reach: adventurousness / 100,
+          dialect,
           exclude: breadcrumbs.slice(0, -1),
           weights: {
             sound: .92,
@@ -669,9 +825,10 @@ export function RhymeStudio() {
           },
         })
         .then((results) => {
-          if (revision !== searchRevision.current) return;
+          if (revision !== soundSearchRevision.current) return;
           if (results.length === 0) {
             setBaseCandidates([]);
+            setBaseCandidatesRevision(revision);
             setCandidates([]);
             setSelectedId("");
             setStatusMessage(`No local pronunciation found for “${anchor}”`);
@@ -686,7 +843,8 @@ export function RhymeStudio() {
             durationMs: Math.round(performance.now() - searchStartedAt),
           });
           setBaseCandidates(mapped);
-          setCandidates(mapped.slice(0, 30));
+          setBaseCandidatesRevision(revision);
+          setCandidates(mapped);
           setSemanticQuery(query);
           setSelectedId((current) =>
             mapped.some((candidate) => candidate.id === current) ? current : mapped[0].id,
@@ -694,21 +852,26 @@ export function RhymeStudio() {
           setStatusMessage(`${mapped.length} local neighbours found`);
         })
         .catch((error: unknown) => {
-          if (revision !== searchRevision.current) return;
+          if (revision !== soundSearchRevision.current) return;
           if (error instanceof Error && error.message.includes("superseded")) return;
           setEngineStatus("error");
           setStatusMessage("Using the studio demo pack");
         })
         .finally(() => {
-          if (revision === searchRevision.current) setSearching(false);
+          if (revision === soundSearchRevision.current) setSearching(false);
         });
     }, 180);
 
     return () => window.clearTimeout(timer);
-  }, [anchor, pins, intent, concept, adventurousness, draft, anchorRange, breadcrumbs, engineStatus, recordResearch]);
+  }, [anchor, pins, intent, concept, adventurousness, dialect, draft, anchorRange, breadcrumbs, engineStatus, recordResearch]);
 
   useEffect(() => {
-    if (semanticStatus !== "ready" || baseCandidates.length === 0) return;
+    const hybridRevision = ++hybridSearchRevision.current;
+    if (
+      semanticStatus !== "ready"
+      || baseCandidates.length === 0
+      || baseCandidatesRevision !== soundSearchRevision.current
+    ) return;
     const previous = semanticRerankInputRef.current;
     const onlyMixChanged = Boolean(
       previous &&
@@ -721,12 +884,23 @@ export function RhymeStudio() {
       query: semanticQuery,
       status: semanticStatus,
     };
-    const revision = searchRevision.current;
     const timer = window.setTimeout(() => {
-      void applySemanticRerank(semanticQuery, baseCandidates, revision);
-    }, onlyMixChanged ? 240 : 0);
+      void applyHybridSearch(
+        semanticQuery,
+        baseCandidates,
+        baseCandidatesRevision,
+        hybridRevision,
+      );
+    }, meaningBalance <= 0 ? 0 : onlyMixChanged ? 240 : 0);
     return () => window.clearTimeout(timer);
-  }, [semanticStatus, baseCandidates, semanticQuery, applySemanticRerank]);
+  }, [
+    semanticStatus,
+    baseCandidates,
+    baseCandidatesRevision,
+    semanticQuery,
+    meaningBalance,
+    applyHybridSearch,
+  ]);
 
   useEffect(() => {
     if (!toast) return;
@@ -821,6 +995,7 @@ export function RhymeStudio() {
       draft: before,
       range,
       anchor,
+      breadcrumbs: [...breadcrumbs],
       inserted: candidate.word,
       relation: candidate.relation,
       rank: candidates.indexOf(candidate) + 1,
@@ -844,13 +1019,14 @@ export function RhymeStudio() {
       textareaRef.current?.focus();
       textareaRef.current?.setSelectionRange(nextRange.start, nextRange.end);
     }, 0);
-  }, [anchor, anchorRange, candidates, draft, intent, recordResearch]);
+  }, [anchor, anchorRange, breadcrumbs, candidates, draft, intent, recordResearch]);
 
   const undoInsert = useCallback(() => {
     if (!undoState) return;
     setDraft(undoState.draft);
     setAnchor(undoState.anchor);
     setAnchorRange(undoState.range);
+    setBreadcrumbs(undoState.breadcrumbs);
     recordResearch({
       type: "candidate",
       action: "undone",
@@ -866,6 +1042,7 @@ export function RhymeStudio() {
 
   const selectCandidate = useCallback((candidate: CandidateView) => {
     setSelectedId(candidate.id);
+    setDetailsOpen(true);
     recordResearch({
       type: "candidate",
       action: "selected",
@@ -883,9 +1060,11 @@ export function RhymeStudio() {
     if (nextIntent === "bridge") enableSemantic("bridge");
   }, [enableSemantic, recordResearch]);
 
-  const chooseView = useCallback((nextView: "map" | "list") => {
+  const chooseView = useCallback((nextView: ResultView) => {
     setViewMode(nextView);
-    recordResearch({ type: "view", view: nextView });
+    if (nextView === "map" || nextView === "list") {
+      recordResearch({ type: "view", view: nextView });
+    }
   }, [recordResearch]);
 
   const updateMeaningBalance = useCallback((value: number) => {
@@ -920,13 +1099,14 @@ export function RhymeStudio() {
         meaningMix: meaningBalance,
         adventurousness,
         meaningState: semanticStatus,
+        dialect,
       });
       downloadResearchSession(snapshot);
       setToast("Research session exported · no draft text included");
     } catch {
       setToast("Research export is unavailable in this browser");
     }
-  }, [adventurousness, anchor, concept, intent, meaningBalance, pins, semanticStatus]);
+  }, [adventurousness, anchor, concept, dialect, intent, meaningBalance, pins, semanticStatus]);
 
   const stopResearch = useCallback(() => {
     let cleared = true;
@@ -1007,9 +1187,33 @@ export function RhymeStudio() {
         </label>
 
         <div className="topbar-actions">
-          <span className="save-state"><Check size={13} /> Saved on this device</span>
-          <button className="dialect-button" type="button" title="Dialect profiles are coming next">
-            <span>General American</span><ChevronDown size={14} />
+          <span
+            className={`save-state save-state-${saveStatus}`}
+            role="status"
+            aria-live="polite"
+          >
+            {saveStatus === "saved" && <Check size={13} />}
+            {saveStatus === "error" && <CircleAlert size={13} />}
+            {saveStatus === "saved"
+              ? "Saved on this device"
+              : saveStatus === "error"
+                ? "Not saved on this device"
+                : "Checking local save"}
+          </span>
+          <button
+            className="dialect-button"
+            type="button"
+            aria-label={`Pronunciation profile: ${dialect === "en-GB" ? "UK non-rhotic beta" : "General American"}. Switch profile`}
+            title="Switch the pronunciation profile used for rhyme scoring"
+            onClick={() => {
+              const next = dialect === "en-GB" ? "en-US" : "en-GB";
+              setDialect(next);
+              setToast(next === "en-GB"
+                ? "UK non-rhotic profile · conservative beta transform"
+                : "General American pronunciation profile");
+            }}
+          >
+            <span>{dialect === "en-GB" ? "UK non-rhotic · beta" : "General American"}</span><ChevronDown size={14} />
           </button>
           <button
             className="icon-button perform-button"
@@ -1058,7 +1262,7 @@ export function RhymeStudio() {
           <header>
             <div>
               <span>LOCAL SETTINGS</span>
-              <strong>Private by construction</strong>
+              <strong>Local by design</strong>
             </div>
             <button ref={settingsCloseButtonRef} type="button" aria-label="Close local settings" onClick={closeSettings}><X size={15} /></button>
           </header>
@@ -1134,7 +1338,7 @@ export function RhymeStudio() {
             )}
           </section>
 
-          <p className="settings-privacy"><span className="local-dot" /> No remote analytics or account. Research session data is never uploaded.</p>
+          <p className="settings-privacy"><span className="local-dot" /> No remote analytics or account. Research data is never uploaded. On GitHub Pages, browser storage shares the <code>sjmakin.github.io</code> origin with other project pages.</p>
         </aside>
       )}
 
@@ -1147,7 +1351,9 @@ export function RhymeStudio() {
         </button>
       </div>
 
-      <section className="workspace">
+      <section
+        className={`workspace ${exploreFocused ? "explore-focused" : ""} ${detailsOpen ? "candidate-details-open" : ""}`}
+      >
         <section className={`panel draft-panel ${mobilePanel === "write" ? "mobile-active" : ""}`} aria-label="Draft">
           <div className="panel-header draft-header">
             <div>
@@ -1190,7 +1396,7 @@ export function RhymeStudio() {
               onKeyUp={(event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
                 if (event.key.startsWith("Arrow") || event.key === "Shift") captureAnchor();
               }}
-              spellCheck
+              spellCheck={false}
               aria-label="Lyric draft"
             />
           </div>
@@ -1218,9 +1424,24 @@ export function RhymeStudio() {
                 </button>
               ))}
             </div>
-            <div className="view-switch" aria-label="Result view">
-              <button type="button" className={viewMode === "map" ? "active" : ""} aria-pressed={viewMode === "map"} onClick={() => chooseView("map")} aria-label="Map view"><MapIcon size={15} /></button>
-              <button type="button" className={viewMode === "list" ? "active" : ""} aria-pressed={viewMode === "list"} onClick={() => chooseView("list")} aria-label="List view"><List size={15} /></button>
+            <div className="explore-toolbar-actions">
+              <div className="view-switch" role="group" aria-label="Result view">
+                <button type="button" className={viewMode === "family" ? "active" : ""} aria-pressed={viewMode === "family"} onClick={() => chooseView("family")} aria-label="Family view"><LayoutGrid size={14} /><span>Families</span></button>
+                <button type="button" className={viewMode === "map" ? "active" : ""} aria-pressed={viewMode === "map"} onClick={() => chooseView("map")} aria-label="Map view"><MapIcon size={14} /><span>Map</span></button>
+                <button type="button" className={viewMode === "list" ? "active" : ""} aria-pressed={viewMode === "list"} onClick={() => chooseView("list")} aria-label="List view"><List size={14} /><span>List</span></button>
+              </div>
+              <button
+                className={`explore-focus-button ${exploreFocused ? "active" : ""}`}
+                type="button"
+                aria-pressed={exploreFocused}
+                onClick={() => {
+                  setExploreFocused((focused) => !focused);
+                  setDetailsOpen(false);
+                }}
+              >
+                {exploreFocused ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                <span>{exploreFocused ? "Show draft" : "Focus"}</span>
+              </button>
             </div>
           </div>
 
@@ -1242,23 +1463,23 @@ export function RhymeStudio() {
 
           <div className="mix-controls">
             <label className="mix-control">
-              <span>Sound</span>
+              <span className="control-name">Meaning</span>
               <input
                 type="range"
                 min="0"
                 max="100"
-                value={semanticEnabled ? meaningBalance : 0}
+                value={effectiveMeaningBalance}
+                disabled={semanticStatus === "loading" || semanticStatus === "error"}
                 onChange={(event) => updateMeaningBalance(Number(event.target.value))}
                 onPointerUp={() => recordResearch({ type: "meaning_mix", value: meaningBalance })}
                 onKeyUp={() => recordResearch({ type: "meaning_mix", value: meaningBalance })}
                 aria-label="Balance sound and meaning"
-                aria-valuetext={semanticEnabled ? `${meaningBalance}% meaning` : "Meaning off · move to enable"}
+                aria-valuetext={`${meaningControlState}, ${effectiveMeaningBalance}% mix position`}
               />
-              <span className="meaning-label">Meaning</span>
-              {!semanticEnabled && <span className="meaning-off-hint">Meaning off · move to enable</span>}
+              <strong className="control-state">{meaningControlState}</strong>
             </label>
             <label className="mix-control tightness-control">
-              <span>Tight</span>
+              <span className="control-name">Reach</span>
               <input
                 type="range"
                 min="0"
@@ -1266,8 +1487,9 @@ export function RhymeStudio() {
                 value={adventurousness}
                 onChange={(event) => setAdventurousness(Number(event.target.value))}
                 aria-label="Rhyme adventurousness"
+                aria-valuetext={`${reachState(adventurousness)}, ${adventurousness}% reach`}
               />
-              <span>Wild</span>
+              <strong className="control-state">{reachState(adventurousness)}</strong>
             </label>
             <button className={`filter-button ${advancedOpen ? "active" : ""}`} type="button" onClick={() => setAdvancedOpen((open) => !open)}>
               <SlidersHorizontal size={15} /> Filters
@@ -1287,12 +1509,12 @@ export function RhymeStudio() {
                   <option value="any">Any</option><option value="noun">Noun</option><option value="verb">Verb</option><option value="adjective">Adjective</option><option value="adverb">Adverb</option>
                 </select>
               </label>
-              <div className="filter-note"><CircleHelp size={14} /> Filters stay soft so a surprising word can still surface.</div>
+              <div className="filter-note"><CircleHelp size={14} /> Filters refill from the whole retrieved neighbourhood.</div>
             </div>
           )}
 
           <div className="engine-status" aria-live="polite">
-            <span><EngineDot status={engineStatus} /> {engineStatus === "ready" ? `${lexiconCount.toLocaleString()} words local` : `${engineProgress}% sound map`}</span>
+            <span><EngineDot status={engineStatus} /> {engineStatus === "ready" ? `${lexiconCount.toLocaleString()} terms local` : engineStatus === "error" ? "sound map unavailable" : `${engineProgress}% sound map`}</span>
             <span className="semantic-engine" data-semantic-state={semanticStatus}>
               <EngineDot status={semanticStatus} />
               <span>
@@ -1301,8 +1523,8 @@ export function RhymeStudio() {
                   : semanticStatus === "error"
                     ? "meaning unavailable"
                     : semanticStatus === "loading"
-                      ? "loading locally · ~46 MiB"
-                      : "meaning off · ~46 MiB optional"}
+                      ? `loading locally · ${SEMANTIC_DOWNLOAD_LABEL}`
+                      : `meaning off · ${SEMANTIC_DOWNLOAD_LABEL} optional`}
               </span>
               <button
                 type="button"
@@ -1318,28 +1540,75 @@ export function RhymeStudio() {
             <span className={searching ? "searching" : ""}>{searching ? "updating…" : statusMessage}</span>
           </div>
 
-          <div className={`graph-stage ${viewMode === "list" ? "list-mode" : ""}`}>
+          <div className={`graph-stage ${viewMode}-mode`}>
             {visibleCandidates.length === 0 ? (
               <div className="empty-results">
                 <Search size={24} />
-                <strong>Nothing useful at this tightness.</strong>
-                <button type="button" onClick={() => setAdventurousness((value) => Math.min(100, value + 25))}>Go looser</button>
+                <strong>{filtersActive ? "No neighbours match these filters." : "Nothing useful at this reach."}</strong>
+                {filtersActive ? (
+                  <button type="button" onClick={() => {
+                    setSyllableFilter("any");
+                    setPartOfSpeech("any");
+                  }}>Clear filters</button>
+                ) : (
+                  <button type="button" onClick={() => setAdventurousness((value) => Math.min(100, value + 25))}>Go farther</button>
+                )}
+              </div>
+            ) : viewMode === "family" ? (
+              <div className="family-board" aria-label="Rhyme families">
+                <div className="family-board-intro">
+                  <strong>Choose a way in</strong>
+                  <span>Words can sit in more than one family when several sounds connect.</span>
+                </div>
+                {familyGroups.map((group) => (
+                  <section className={`family-channel family-${group.id}`} key={group.id} aria-labelledby={`family-${group.id}-title`}>
+                    <header>
+                      <div>
+                        <h2 id={`family-${group.id}-title`}>{group.name}</h2>
+                        <p>{group.description}</p>
+                      </div>
+                      <span>{group.total}</span>
+                    </header>
+                    <div className="family-cards">
+                      {group.candidates.length > 0 ? group.candidates.map((candidate) => (
+                        <button
+                          key={candidate.id}
+                          type="button"
+                          className={`family-candidate ${candidate.id === selected?.id ? "active" : ""}`}
+                          onClick={() => selectCandidate(candidate)}
+                          aria-label={`${candidate.word}, ${candidate.overall} percent fit, ${group.name}. Open explanation`}
+                        >
+                          <span className="family-candidate-rank">{String(candidates.indexOf(candidate) + 1).padStart(2, "0")}</span>
+                          <span className="family-candidate-word">{candidate.word}</span>
+                          <strong>{candidate.overall}</strong>
+                          <small>{familyEvidence(candidate, group.id)}</small>
+                        </button>
+                      )) : (
+                        <p className="family-empty">No {group.shortName.toLowerCase()} options in this neighbourhood.</p>
+                      )}
+                    </div>
+                  </section>
+                ))}
               </div>
             ) : viewMode === "map" ? (
               <>
-                <span className="lane-label lane-vowel">VOWEL</span>
-                <span className="lane-label lane-coda">CODA</span>
-                <span className="lane-label lane-meaning">MEANING</span>
-                <span className="lane-label lane-flow">FLOW</span>
+                <span className="map-method-note">Actual candidate-to-candidate sound links</span>
                 <svg className="graph-edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                  {visibleCandidates.map((candidate, index) => {
-                    const position = graphPosition(candidate, index);
+                  {localGraph.edges.map((edge) => {
+                    const source = edge.source === "__anchor__"
+                      ? { x: 50, y: 50 }
+                      : graphNodeById.get(edge.source);
+                    const target = graphNodeById.get(edge.target);
+                    if (!source || !target) return null;
+                    const targetCandidate = visibleCandidates.find((candidate) => candidate.id === edge.target);
                     return (
                       <line
-                        key={candidate.id}
-                        x1="50" y1="47" x2={position.x} y2={position.y}
-                        className={`${RELATION_CLASS[candidate.relation]} ${candidate.estimated ? "estimated" : ""}`}
-                        style={{ strokeWidth: Math.max(.22, candidate.overall / 165) }}
+                        key={`${edge.kind}:${edge.source}:${edge.target}`}
+                        x1={source.x} y1={source.y} x2={target.x} y2={target.y}
+                        className={edge.kind === "neighbour"
+                          ? `neighbour-edge ${edge.source === selected?.id || edge.target === selected?.id ? "active" : ""}`
+                          : `${targetCandidate ? RELATION_CLASS[targetCandidate.relation] : "relation-flow"} ${targetCandidate?.estimated ? "estimated" : ""}`}
+                        style={{ strokeWidth: edge.kind === "neighbour" ? Math.max(.32, edge.weight * 1.05) : Math.max(.2, edge.weight * .7) }}
                       />
                     );
                   })}
@@ -1348,8 +1617,8 @@ export function RhymeStudio() {
                   <span>{anchor}</span>
                   <small>{pins.length > 0 ? `${pins.length + 1} anchors` : "sound anchor"}</small>
                 </button>
-                {visibleCandidates.map((candidate, index) => {
-                  const position = graphPosition(candidate, index);
+                {visibleCandidates.map((candidate) => {
+                  const position = graphNodeById.get(candidate.id) ?? { x: 50, y: 50 };
                   const active = candidate.id === selected?.id;
                   const pinned = pins.includes(candidate.word);
                   const style = {
@@ -1362,8 +1631,7 @@ export function RhymeStudio() {
                     <button
                       key={candidate.id}
                       type="button"
-                      tabIndex={-1}
-                      aria-hidden="true"
+                      aria-label={`${candidate.word}, ${candidate.overall} percent fit, ${RELATION_LABEL[candidate.relation]}`}
                       className={`graph-node ${active ? "active" : ""} ${pinned ? "pinned" : ""}`}
                       style={style}
                       onClick={() => selectCandidate(candidate)}
@@ -1389,22 +1657,24 @@ export function RhymeStudio() {
             )}
           </div>
 
-          <div className="candidate-rail" aria-label="Ranked candidates">
-            {visibleCandidates.slice(0, 8).map((candidate, index) => (
-              <button
-                key={candidate.id}
-                type="button"
-                className={candidate.id === selected?.id ? "active" : ""}
-                onClick={() => selectCandidate(candidate)}
-                aria-label={`${candidate.word}, ${candidate.overall} percent match, ${RELATION_LABEL[candidate.relation]}`}
-              >
-                <span className="rail-rank">{String(index + 1).padStart(2, "0")}</span>
-                <span className="rail-word">{candidate.word}</span>
-                <span className={`rail-relation ${RELATION_CLASS[candidate.relation]}`}>{RELATION_LABEL[candidate.relation]}</span>
-                <strong>{candidate.overall}</strong>
-              </button>
-            ))}
-          </div>
+          {viewMode === "map" && (
+            <div className="candidate-rail" aria-label="Ranked candidates">
+              {visibleCandidates.slice(0, 8).map((candidate, index) => (
+                <button
+                  key={candidate.id}
+                  type="button"
+                  className={candidate.id === selected?.id ? "active" : ""}
+                  onClick={() => selectCandidate(candidate)}
+                  aria-label={`${candidate.word}, ${candidate.overall} percent fit, ${RELATION_LABEL[candidate.relation]}`}
+                >
+                  <span className="rail-rank">{String(index + 1).padStart(2, "0")}</span>
+                  <span className="rail-word">{candidate.word}</span>
+                  <span className={`rail-relation ${RELATION_CLASS[candidate.relation]}`}>{RELATION_LABEL[candidate.relation]}</span>
+                  <strong>{candidate.overall}</strong>
+                </button>
+              ))}
+            </div>
+          )}
 
           <div className="family-tray">
             <span className="family-label">FAMILY</span>
@@ -1413,11 +1683,12 @@ export function RhymeStudio() {
               <button key={word} className="pin-chip" type="button" onClick={() => togglePin(word)}>{word}<X size={11} /></button>
             ))}
             {pins.length === 0 && <span className="family-hint">Pin words to teach the sound</span>}
-            <span className="family-summary">{pins.length > 0 ? "shared vowel · falling cadence" : "single anchor"}</span>
+            <span className="family-summary">{pins.length > 0 ? "shared sound family" : "single anchor"}</span>
           </div>
           {selected && (
             <div className="mobile-candidate-actions">
               <span><strong>{selected.word}</strong><small>{selected.overall}% · {RELATION_LABEL[selected.relation]}</small></span>
+              <button type="button" onClick={() => setDetailsOpen(true)} aria-label={`Explain ${selected.word}`}><CircleHelp size={15} /></button>
               <button type="button" onClick={() => togglePin(selected.word)} aria-label={`Pin ${selected.word}`}><Pin size={15} /></button>
               <button type="button" onClick={() => expandCandidate(selected)} aria-label={`Expand ${selected.word}`}><Network size={15} /></button>
               <button className="mobile-insert" type="button" onClick={() => insertCandidate(selected)}>Insert <CornerDownLeft size={15} /></button>
@@ -1430,7 +1701,10 @@ export function RhymeStudio() {
             <>
               <div className="inspector-topline">
                 <span className={`relation-pill ${RELATION_CLASS[selected.relation]}`}>{RELATION_LABEL[selected.relation]}</span>
-                <span>{selected.overall}% match</span>
+                <div className="inspector-topline-actions">
+                  <span>{selected.overall}% route fit</span>
+                  <button type="button" className="inspector-close" aria-label="Close candidate details" onClick={() => setDetailsOpen(false)}><X size={14} /></button>
+                </div>
               </div>
               <div className="word-heading">
                 <h1>{selected.word}</h1>
@@ -1451,7 +1725,10 @@ export function RhymeStudio() {
                   value={semanticStatus === "ready" ? selected.meaning : 0}
                   tone="var(--accent-lilac)"
                 />
-                <ScoreBar label="Flow" value={selected.flow} tone="var(--accent-coral)" />
+                <ScoreBar label="Stress shape" value={selected.flow} tone="var(--accent-coral)" />
+                {semanticStatus === "ready" && (
+                  <p className="score-note">Meaning is a corpus-calibrated similarity, not a confidence score.</p>
+                )}
               </div>
 
               <div className="candidate-meta">

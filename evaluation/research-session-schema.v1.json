@@ -43,7 +43,8 @@
         "intent": { "$ref": "#/$defs/intent" },
         "meaningMix": { "$ref": "#/$defs/percentage" },
         "adventurousness": { "$ref": "#/$defs/percentage" },
-        "meaningState": { "enum": ["idle", "loading", "ready", "error"] }
+        "meaningState": { "enum": ["idle", "loading", "ready", "error"] },
+        "dialect": { "enum": ["en-US", "en-GB"] }
       }
     },
     "summary": {

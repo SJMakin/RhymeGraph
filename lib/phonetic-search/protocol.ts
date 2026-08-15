@@ -1,4 +1,4 @@
-import type { RecommendationIntent, RelationshipLabel } from "../phonetics";
+import type { PerformanceDialect, RecommendationIntent, RelationshipLabel } from "../phonetics";
 
 export interface SearchCandidate {
   id: string;
@@ -21,6 +21,15 @@ export interface SearchCandidate {
   tags: string[];
 }
 
+/**
+ * Stable, collision-free identity for a returned lexical item. Keep the exact
+ * normalized spelling: punctuation and word boundaries distinguish entries
+ * such as `first-class` and the generated phrase `first class`.
+ */
+export function searchCandidateId(kind: "word" | "phrase", normalized: string) {
+  return `${kind}:${normalized}`;
+}
+
 export type PhoneticWorkerRequest =
   | { type: "init"; requestId: number }
   | {
@@ -31,6 +40,9 @@ export type PhoneticWorkerRequest =
       semanticScores?: Record<string, number>;
       limit?: number;
       minPhonetic?: number;
+      /** Normalized 0..1 exploration distance. Changes ranking, not only cutoff. */
+      reach?: number;
+      dialect?: PerformanceDialect;
       exclude?: string[];
       weights?: { sound?: number; meaning?: number; utility?: number };
     };

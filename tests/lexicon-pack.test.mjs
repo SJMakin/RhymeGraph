@@ -8,6 +8,17 @@ const pack = JSON.parse(
   await readFile(new URL("../public/data/cmudict.compact.json", import.meta.url), "utf8"),
 );
 
+test("the production pack retains spoken forms and labelled UK/reference coverage", () => {
+  assert.ok(pack.entries.length >= 50_000, `expected expanded pack, received ${pack.entries.length}`);
+  const entries = new Map(pack.entries.map((entry) => [entry[0], entry]));
+  for (const word of ["dorchester", "geezer", "malbec", "mayfair", "moncler", "shiraz", "sports", "vuvuzela"]) {
+    assert.ok(entries.has(word), `missing ${word}`);
+  }
+  assert.match(pack.source, /SUBTLEX-US spoken frequency/);
+  assert.equal(pack.entryFlags.reference, 16);
+  assert.ok(entries.get("you")[4] > entries.get("malbec")[4]);
+});
+
 test("the production phrase pack contains only unique, word-bounded phrases", () => {
   const phraseNames = pack.phrases.map(([text]) => text);
   assert.equal(new Set(phraseNames).size, phraseNames.length);

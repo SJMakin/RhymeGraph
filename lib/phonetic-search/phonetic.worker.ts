@@ -1,14 +1,23 @@
 import { createRhymeEngine, type LexiconEntryInput, type RhymeEngine } from "../phonetics";
-import { withBasePath } from "../public-path";
-import type {
-  PhoneticWorkerEvent,
-  PhoneticWorkerRequest,
-  SearchCandidate,
+import { composePerformancePhraseEntries } from "./performance-phrases";
+import {
+  searchCandidateId,
+  type PhoneticWorkerEvent,
+  type PhoneticWorkerRequest,
+  type SearchCandidate,
 } from "./protocol";
 
 interface CompactLexicon {
   version: string;
-  entries: Array<[string, string[], number, number]>;
+  entries: Array<[string, string[], number, number, number?, number?]>;
+  entryFlags?: {
+    wordnet?: number;
+    spoken?: number;
+    authored?: number;
+    slang?: number;
+    reference?: number;
+    uk?: number;
+  };
   phrases: Array<[
     string,
     Array<string | { phonemes: string; wordStarts?: number[] }>,
@@ -22,6 +31,15 @@ interface WorkerScope {
 
 const scope = self as unknown as WorkerScope;
 let enginePromise: Promise<{ engine: RhymeEngine; version: string; elapsedMs: number }> | undefined;
+const LEXICON_SHA256 = "2e61f5f0633d0ea94dd973ba945641a130217721c25d41194fe8d0487111b26c";
+const configuredWorkerBasePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+const workerBasePath = configuredWorkerBasePath
+  ? `/${configuredWorkerBasePath.replace(/^\/+|\/+$/g, "")}`
+  : "";
+
+function withWorkerBasePath(path: string) {
+  return `${workerBasePath}${path.startsWith("/") ? path : `/${path}`}`;
+}
 
 function utilityFromMetadata(word: string, senses: number): number {
   const senseUtility = Math.min(.95, .35 + Math.log2(1 + Math.max(1, senses)) * .12);
@@ -38,6 +56,20 @@ function tagsFromMask(mask: number): string[] {
   return tags;
 }
 
+function tagsFromMetadata(
+  partOfSpeechMask: number,
+  flags: number,
+  definitions: CompactLexicon["entryFlags"],
+): string[] {
+  const tags = tagsFromMask(partOfSpeechMask);
+  if (definitions?.spoken && (flags & definitions.spoken) !== 0) tags.push("spoken-corpus");
+  if (definitions?.authored && (flags & definitions.authored) !== 0) tags.push("authored-pronunciation");
+  if (definitions?.slang && (flags & definitions.slang) !== 0) tags.push("slang");
+  if (definitions?.reference && (flags & definitions.reference) !== 0) tags.push("reference");
+  if (definitions?.uk && (flags & definitions.uk) !== 0) tags.push("en-GB");
+  return tags;
+}
+
 function emitProgress(requestId: number, stage: "fetching" | "parsing" | "indexing" | "searching", progress: number) {
   scope.postMessage({ type: "progress", requestId, stage, progress });
 }
@@ -45,18 +77,22 @@ function emitProgress(requestId: number, stage: "fetching" | "parsing" | "indexi
 async function createEngine(requestId: number) {
   const start = performance.now();
   emitProgress(requestId, "fetching", .08);
-  const response = await fetch(withBasePath("/data/cmudict.compact.json"));
+  const response = await fetch(
+    `${withWorkerBasePath("/data/cmudict.compact.json")}?v=${LEXICON_SHA256}`,
+  );
   if (!response.ok) throw new Error(`Local pronunciation pack failed to load (${response.status}).`);
   emitProgress(requestId, "parsing", .32);
   const pack = (await response.json()) as CompactLexicon;
   emitProgress(requestId, "indexing", .56);
 
   const entries: LexiconEntryInput[] = pack.entries.map(
-    ([text, pronunciations, partOfSpeechMask, senses]) => ({
+    ([text, pronunciations, partOfSpeechMask, senses, storedUtility, flags = 0]) => ({
       text,
       pronunciations,
-      frequency: utilityFromMetadata(text, senses),
-      tags: tagsFromMask(partOfSpeechMask),
+      frequency: storedUtility === undefined
+        ? utilityFromMetadata(text, senses)
+        : Math.max(0, Math.min(1, storedUtility / 1000)),
+      tags: tagsFromMetadata(partOfSpeechMask, flags, pack.entryFlags),
     }),
   );
   entries.push(
@@ -68,6 +104,7 @@ async function createEngine(requestId: number) {
       tags: ["phrase"],
     })),
   );
+  entries.push(...composePerformancePhraseEntries(entries));
 
   const engine = createRhymeEngine(entries);
   return { engine, version: pack.version, elapsedMs: Math.round(performance.now() - start) };
@@ -91,7 +128,7 @@ function mapCandidate(recommendation: ReturnType<RhymeEngine["recommend"]>[numbe
     .flatMap((comparison) => comparison.explanation)
     .slice(0, 3);
   return {
-    id: recommendation.item.normalized.replace(/[^a-z0-9]+/g, "-") || "candidate",
+    id: searchCandidateId(recommendation.item.kind, recommendation.item.normalized),
     word: recommendation.item.text,
     pronunciation: pronunciation.source,
     overall: score(recommendation.score),
@@ -107,7 +144,7 @@ function mapCandidate(recommendation: ReturnType<RhymeEngine["recommend"]>[numbe
     labels: [...recommendation.labels],
     reasons: [...new Set([...recommendation.explanation, ...comparisonReasons])].slice(0, 4),
     phrase: recommendation.item.kind === "phrase",
-    estimated: false,
+    estimated: recommendation.item.tags.includes("authored-pronunciation"),
     tags: [...recommendation.item.tags],
   };
 }
@@ -133,6 +170,8 @@ async function search(request: Extract<PhoneticWorkerRequest, { type: "search" }
     semanticScores: request.semanticScores,
     limit: request.limit ?? 60,
     minPhonetic: request.minPhonetic,
+    reach: request.reach,
+    dialect: request.dialect,
     exclude: request.exclude,
     weights: request.weights,
   });

@@ -76,15 +76,16 @@ test.beforeEach(async ({ page }) => {
 });
 
 async function waitForStudio(page: Page) {
-  await expect(page.getByText(/35,[0-9]{3} words local/)).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/[0-9]{2,3},[0-9]{3} terms local/i)).toBeVisible({ timeout: 30_000 });
 }
 
 function semanticRequests(runtime: RuntimeAudit): string[] {
   return runtime.requests.filter((request) => {
     const pathname = new URL(request.url).pathname;
-    return pathname.includes("/workers/semantic.worker.js")
+    return pathname.includes("/workers/semantic.worker")
       || pathname.includes("/models/")
-      || /\/workers\/assets\/.*\.(?:wasm|mjs)$/.test(pathname);
+      || pathname.includes("/data/semantic-index.")
+      || /\/workers\/assets\/.*\.(?:wasm|mjs)(?:$|\?)/.test(pathname);
   }).map((request) => request.url);
 }
 
@@ -161,8 +162,53 @@ test("runs both local engines and supports the core writing loop", async ({ page
   await page.addInitScript(() => {
     const browserState = globalThis as typeof globalThis & {
       rhymeGraphDelayedSemanticResults?: number;
+      rhymeGraphDelayedHybridResults?: number;
+      rhymeGraphFailNextSemanticRetrieve?: boolean;
+      rhymeGraphFailNextHybridResult?: boolean;
+      rhymeGraphHybridPhoneticRequestIds?: number[];
+      rhymeGraphWorkerRequests?: Array<{
+        type?: string;
+        requestId?: number;
+        intent?: string;
+        meaningWeight?: number;
+        queryText?: string;
+      }>;
     };
     browserState.rhymeGraphDelayedSemanticResults = 0;
+    browserState.rhymeGraphDelayedHybridResults = 0;
+    browserState.rhymeGraphHybridPhoneticRequestIds = [];
+    browserState.rhymeGraphWorkerRequests = [];
+    const nativePostMessage = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (
+      this: Worker,
+      message: unknown,
+      options?: StructuredSerializeOptions | Transferable[],
+    ) {
+      const request = message && typeof message === "object"
+        ? message as {
+          type?: string;
+          requestId?: number;
+          intent?: string;
+          queryText?: string;
+          weights?: { meaning?: number };
+        }
+        : {};
+      browserState.rhymeGraphWorkerRequests?.push({
+        type: request.type,
+        requestId: request.requestId,
+        intent: request.intent,
+        meaningWeight: request.weights?.meaning,
+        queryText: request.queryText,
+      });
+      if (
+        request.type === "search"
+        && typeof request.requestId === "number"
+        && (request.weights?.meaning ?? 0) > 0
+      ) {
+        browserState.rhymeGraphHybridPhoneticRequestIds?.push(request.requestId);
+      }
+      return nativePostMessage.call(this, message, options as StructuredSerializeOptions);
+    } as typeof Worker.prototype.postMessage;
     type WorkerListener = EventListenerOrEventListenerObject;
     type WorkerAddEventListener = (
       this: Worker,
@@ -181,14 +227,45 @@ test("runs both local engines and supports the core writing loop", async ({ page
         return nativeAddEventListener.call(this, type, listener, options);
       }
       const delayedListener: EventListener = (rawEvent) => {
-        const event = rawEvent as MessageEvent<{ type?: string }>;
-        if (event.data?.type !== "result") {
+        const event = rawEvent as MessageEvent<{ type?: string; requestId?: number }>;
+        if (event.data?.type !== "result" && event.data?.type !== "retrieved") {
           listener.call(this, event);
           return;
         }
         browserState.rhymeGraphDelayedSemanticResults =
           (browserState.rhymeGraphDelayedSemanticResults ?? 0) + 1;
-        window.setTimeout(() => listener.call(this, event), 400);
+        const hybridResult = event.data.type === "result"
+          && typeof event.data.requestId === "number"
+          && browserState.rhymeGraphHybridPhoneticRequestIds?.includes(event.data.requestId);
+        if (hybridResult) {
+          browserState.rhymeGraphDelayedHybridResults =
+            (browserState.rhymeGraphDelayedHybridResults ?? 0) + 1;
+        }
+        window.setTimeout(() => {
+          if (event.data.type === "retrieved" && browserState.rhymeGraphFailNextSemanticRetrieve) {
+            browserState.rhymeGraphFailNextSemanticRetrieve = false;
+            listener.call(this, new MessageEvent("message", {
+              data: {
+                type: "error",
+                requestId: event.data.requestId,
+                message: "Injected stale semantic request failure.",
+              },
+            }));
+            return;
+          }
+          if (hybridResult && browserState.rhymeGraphFailNextHybridResult) {
+            browserState.rhymeGraphFailNextHybridResult = false;
+            listener.call(this, new MessageEvent("message", {
+              data: {
+                type: "error",
+                requestId: event.data.requestId,
+                message: "Injected stale hybrid phonetic request failure.",
+              },
+            }));
+            return;
+          }
+          listener.call(this, event);
+        }, event.data.type === "result" ? 800 : 400);
       };
       return nativeAddEventListener.call(this, type, delayedListener, options);
     } as typeof Worker.prototype.addEventListener;
@@ -198,6 +275,7 @@ test("runs both local engines and supports the core writing loop", async ({ page
   await expect(page).toHaveTitle(/RhymeGraph/);
   await expect(page.getByLabel("RhymeGraph")).toBeVisible();
   await expect(page.getByLabel("Lyric draft")).toHaveValue(/gravity/);
+  await expect(page.getByLabel("Lyric draft")).toHaveAttribute("spellcheck", "false");
   await waitForStudio(page);
   await expect(page.locator("[data-semantic-state='idle']")).toBeVisible();
   await page.waitForTimeout(1_200);
@@ -214,17 +292,82 @@ test("runs both local engines and supports the core writing loop", async ({ page
   await expect(settingsButton).toBeFocused();
   await page.getByRole("button", { name: "Enable meaning" }).click();
   await expect(page.getByText("meaning ready", { exact: true })).toBeVisible({ timeout: 60_000 });
+  await expect(
+    page.getByText("Sound + meaning searched across 54,140 local terms", { exact: true }),
+  ).toBeVisible({ timeout: 60_000 });
   expect(semanticRequests(runtime).length, "semantic opt-in must start the local model stack").toBeGreaterThan(0);
+  expect(
+    semanticRequests(runtime).filter((request) => request.includes("/data/semantic-index.v1.bin")),
+    "whole-vocabulary meaning search must load the checked-in local vector index once",
+  ).toHaveLength(1);
   expect(
     semanticRequests(runtime).filter((request) => request.includes("/onnx/model_quantized.onnx")),
     "the local model must not be transferred twice for loading progress metadata",
   ).toHaveLength(1);
-  await expect(page.locator(".candidate-rail button").first()).toBeVisible();
+
+  const requestMarker = await page.evaluate(() => (
+    globalThis as typeof globalThis & { rhymeGraphWorkerRequests?: unknown[] }
+  ).rhymeGraphWorkerRequests?.length ?? 0);
+  await page.getByRole("tab", { name: "Pivot" }).click();
+  await page.waitForFunction((marker) => {
+    const requests = (
+      globalThis as typeof globalThis & {
+        rhymeGraphWorkerRequests?: Array<{
+          type?: string;
+          intent?: string;
+          meaningWeight?: number;
+        }>;
+      }
+    ).rhymeGraphWorkerRequests ?? [];
+    return requests.slice(marker).some((request) => (
+      request.type === "search"
+      && request.intent === "pivot"
+      && request.meaningWeight === 0
+    ));
+  }, requestMarker);
+  // Phonetic results are held for 800 ms by the worker-listener shim above.
+  // During that window a changed intent has no current base generation, so it
+  // must not launch a semantic retrieve or a hybrid phonetic request.
+  await page.waitForTimeout(300);
+  const requestsBeforeNewBase = await page.evaluate((marker) => {
+    const requests = (
+      globalThis as typeof globalThis & {
+        rhymeGraphWorkerRequests?: Array<{
+          type?: string;
+          intent?: string;
+          meaningWeight?: number;
+        }>;
+      }
+    ).rhymeGraphWorkerRequests ?? [];
+    return requests.slice(marker);
+  }, requestMarker);
+  expect(
+    requestsBeforeNewBase.filter((request) => request.type === "retrieve"),
+    "an intent change must wait for its own sound base before semantic retrieval",
+  ).toEqual([]);
+  expect(
+    requestsBeforeNewBase.filter((request) => request.type === "search" && (request.meaningWeight ?? 0) > 0),
+    "an old-base hybrid must never supersede the new sound request",
+  ).toEqual([]);
+  await expect(
+    page.getByText("Sound + meaning searched across 54,140 local terms", { exact: true }),
+  ).toBeVisible({ timeout: 30_000 });
+
+  await expect(page.getByLabel("Family view")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("heading", { name: "Locked landings" })).toBeVisible();
+  await expect(page.locator(".family-candidate").first()).toBeVisible();
 
   await page.getByLabel("List view").click();
   await expect(page.locator(".full-list")).toBeVisible();
   await page.getByLabel("Map view").click();
-  await expect(page.locator(".graph-stage:not(.list-mode)")).toBeVisible();
+  await expect(page.locator(".graph-stage.map-mode")).toBeVisible();
+  await expect(page.getByText("Actual candidate-to-candidate sound links", { exact: true })).toBeVisible();
+  await expect(page.locator(".graph-edges .neighbour-edge").first()).toBeAttached();
+  await page.locator(".graph-node").nth(1).click();
+  // A perfectly horizontal/vertical SVG line can have a zero-height/width
+  // bounding box even while its stroke is rendered. Attachment plus the
+  // active selector proves the graph selection reached a real neighbour edge.
+  await expect(page.locator(".graph-edges .neighbour-edge.active").first()).toBeAttached();
 
   await page.getByRole("tab", { name: "Bridge" }).click();
   await page.getByPlaceholder("quiet, escape, home…").fill("escape and home");
@@ -238,19 +381,92 @@ test("runs both local engines and supports the core writing loop", async ({ page
 
   const draft = page.getByLabel("Lyric draft");
   const beforeInsert = await draft.inputValue();
+  const pathBeforeInsert = await page.locator(".path-card p").innerText();
   await page.locator(".primary-actions").getByRole("button", { name: "Insert" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Inserted" })).toBeVisible();
   await expect(draft).not.toHaveValue(beforeInsert);
   await page.getByRole("button", { name: "Undo" }).click();
   await expect(draft).toHaveValue(beforeInsert);
+  await expect(page.locator(".path-card p")).toHaveText(pathBeforeInsert);
 
+  const meaningControl = page.getByLabel("Balance sound and meaning");
+  await meaningControl.fill("0");
+  await expect(page.locator(".sr-only[aria-live='polite']")).toContainText("Sound-only neighbourhood restored");
+  const soundOnlyCandidates = await page.locator(".candidate-rail button").allTextContents();
   const deliveredResults = await page.evaluate(() => (
     globalThis as typeof globalThis & { rhymeGraphDelayedSemanticResults?: number }
   ).rhymeGraphDelayedSemanticResults ?? 0);
-  await page.getByLabel("Balance sound and meaning").fill("62");
+  const mixRequestMarker = await page.evaluate(() => (
+    globalThis as typeof globalThis & { rhymeGraphWorkerRequests?: unknown[] }
+  ).rhymeGraphWorkerRequests?.length ?? 0);
+  await page.evaluate(() => {
+    (
+      globalThis as typeof globalThis & { rhymeGraphFailNextSemanticRetrieve?: boolean }
+    ).rhymeGraphFailNextSemanticRetrieve = true;
+  });
+  await meaningControl.fill("62");
   await page.waitForFunction((previous) => (
     globalThis as typeof globalThis & { rhymeGraphDelayedSemanticResults?: number }
   ).rhymeGraphDelayedSemanticResults! > previous, deliveredResults);
+  await meaningControl.fill("0");
+  await expect(page.locator(".sr-only[aria-live='polite']")).toContainText("Sound-only neighbourhood restored");
+  await page.waitForTimeout(900);
+  await expect(page.locator("[data-semantic-state='ready']").first()).toBeVisible();
+  expect(
+    await page.locator(".candidate-rail button").allTextContents(),
+    "a delayed semantic result must not repaint after the mix returns to zero",
+  ).toEqual(soundOnlyCandidates);
+  const requestsAfterZeroMix = await page.evaluate((marker) => {
+    const requests = (
+      globalThis as typeof globalThis & {
+        rhymeGraphWorkerRequests?: Array<{ type?: string; meaningWeight?: number }>;
+      }
+    ).rhymeGraphWorkerRequests ?? [];
+    return requests.slice(marker);
+  }, mixRequestMarker);
+  expect(
+    requestsAfterZeroMix.filter((request) => request.type === "search" && (request.meaningWeight ?? 0) > 0),
+    "zero mix must invalidate a semantic result before it can launch hybrid phonetic search",
+  ).toEqual([]);
+
+  await meaningControl.fill("62");
+  await expect(
+    page.getByText("Sound + meaning searched across 54,140 local terms", { exact: true }),
+  ).toBeVisible({ timeout: 30_000 });
+
+  const delayedHybridResults = await page.evaluate(() => {
+    const state = globalThis as typeof globalThis & {
+      rhymeGraphDelayedHybridResults?: number;
+      rhymeGraphFailNextHybridResult?: boolean;
+    };
+    state.rhymeGraphFailNextHybridResult = true;
+    return state.rhymeGraphDelayedHybridResults ?? 0;
+  });
+  await meaningControl.fill("71");
+  await page.waitForFunction((previous) => (
+    globalThis as typeof globalThis & { rhymeGraphDelayedHybridResults?: number }
+  ).rhymeGraphDelayedHybridResults! > previous, delayedHybridResults);
+  await meaningControl.fill("0");
+  await expect(page.locator(".sr-only[aria-live='polite']")).toContainText("Sound-only neighbourhood restored");
+  await page.waitForTimeout(900);
+  await expect(page.locator("[data-semantic-state='ready']").first()).toBeVisible();
+  await expect(page.locator(".engine-status > span").first()).toContainText(/[0-9]{2,3},[0-9]{3} terms local/i);
+  expect(
+    await page.locator(".candidate-rail button").allTextContents(),
+    "a stale hybrid phonetic error must leave the restored sound base intact",
+  ).toEqual(soundOnlyCandidates);
+
+  await meaningControl.fill("62");
+  await expect(
+    page.getByText("Sound + meaning searched across 54,140 local terms", { exact: true }),
+  ).toBeVisible({ timeout: 30_000 });
+  const deliveredBeforeDisable = await page.evaluate(() => (
+    globalThis as typeof globalThis & { rhymeGraphDelayedSemanticResults?: number }
+  ).rhymeGraphDelayedSemanticResults ?? 0);
+  await meaningControl.fill("71");
+  await page.waitForFunction((previous) => (
+    globalThis as typeof globalThis & { rhymeGraphDelayedSemanticResults?: number }
+  ).rhymeGraphDelayedSemanticResults! > previous, deliveredBeforeDisable);
   await page.getByRole("button", { name: "Disable meaning", exact: true }).click();
   await expect(page.locator("[data-semantic-state='idle']")).toBeVisible();
   await page.waitForTimeout(600);
@@ -275,7 +491,7 @@ test("runs both local engines and supports the core writing loop", async ({ page
   };
   expect(researchExport.schemaId).toBe("urn:rhymegraph:research-session:1");
   expect(researchExport.schemaVersion).toBe("1.0.0");
-  expect(researchExport.appVersion).toBe("0.2.0");
+  expect(researchExport.appVersion).toBe("0.3.0");
   expect(researchExport.privacy).toMatchObject({
     fullDraftIncluded: false,
     sentToNetwork: false,
@@ -294,6 +510,16 @@ test("runs both local engines and supports the core writing loop", async ({ page
   expect(await page.evaluate(() => sessionStorage.getItem("rhymegraph.research.session.v1"))).toBeNull();
   await page.getByRole("button", { name: "Close local settings" }).click();
   await page.screenshot({ path: "outputs/rhymegraph-desktop.png", fullPage: true });
+
+  await page.evaluate(() => {
+    Storage.prototype.setItem = () => {
+      throw new DOMException("Storage is unavailable.", "QuotaExceededError");
+    };
+  });
+  await page.getByLabel("Project name").fill("unsaved local edit");
+  await expect(page.getByText("Not saved on this device", { exact: true })).toBeVisible();
+  await page.waitForTimeout(3_600);
+  await expect(page.getByText("Not saved on this device", { exact: true })).toBeVisible();
 });
 
 test("@cross-browser supports the sound-first core loop by keyboard", async ({ page, runtime }) => {
@@ -304,7 +530,7 @@ test("@cross-browser supports the sound-first core loop by keyboard", async ({ p
   expect(semanticRequests(runtime), "sound-first startup must not fetch semantic assets").toEqual([]);
   await expectLightweightAccessibility(page);
 
-  const firstCandidate = page.locator(".candidate-rail button").first();
+  const firstCandidate = page.locator(".family-candidate").first();
   await expect(firstCandidate).toBeVisible();
   await tabTo(page, firstCandidate);
   await expect(firstCandidate).toBeFocused();
@@ -330,7 +556,7 @@ test("@cross-browser supports the sound-first core loop by keyboard", async ({ p
 
 test("falls back to sound-only mode when the semantic worker asset fails", async ({ page, runtime }) => {
   runtime.allowedRuntimeErrors.push(/failed to load resource/i, /semantic\.worker/i);
-  await page.route(/\/workers\/semantic\.worker\.js(?:\?.*)?$/, async (route) => {
+  await page.route(/\/workers\/semantic\.worker(?:\.v\d+)?\.js(?:\?.*)?$/, async (route) => {
     await route.abort("failed");
   });
   await page.goto(appPath("/"));
@@ -338,14 +564,19 @@ test("falls back to sound-only mode when the semantic worker asset fails", async
   await expect(page.locator("[data-semantic-state='idle']")).toBeVisible();
   await page.getByRole("tab", { name: "Bridge" }).click();
   await expect(page.locator("[data-semantic-state='error']")).toBeVisible({ timeout: 20_000 });
+  const meaningControl = page.getByLabel("Balance sound and meaning");
+  await expect(meaningControl).toHaveValue("0");
+  await expect(meaningControl).toBeDisabled();
+  await expect(meaningControl).toHaveAttribute("aria-valuetext", /Unavailable, 0% mix position/i);
+  await expect(page.getByText("Unavailable", { exact: true })).toBeVisible();
 
   const draft = page.getByLabel("Lyric draft");
   await draft.click();
   await draft.press("ControlOrMeta+A");
   await draft.pressSequentially("stay bright");
   await expect(page.locator(".anchor-token strong")).toHaveText("bright");
-  await expect(page.locator(".candidate-rail button").first()).toBeVisible({ timeout: 20_000 });
-  expect(semanticRequests(runtime).some((request) => request.includes("semantic.worker.js"))).toBe(true);
+  await expect(page.locator(".family-candidate").first()).toBeVisible({ timeout: 20_000 });
+  expect(semanticRequests(runtime).some((request) => request.includes("semantic.worker"))).toBe(true);
 });
 
 test("reports meaning-model loading as indeterminate", async ({ page, runtime }) => {
@@ -378,7 +609,7 @@ test("reports meaning-model loading as indeterminate", async ({ page, runtime })
     await expect(progress).not.toHaveAttribute("aria-valuenow", /.+/);
     await expect(progress).not.toHaveAttribute("aria-valuemin", /.+/);
     await expect(progress).not.toHaveAttribute("aria-valuemax", /.+/);
-    await expect(page.getByText("Loading locally · about 46 MiB", { exact: true })).toBeVisible();
+    await expect(page.getByText("Loading locally · about 69 MiB", { exact: true })).toBeVisible();
     expect(await page.locator(".local-settings-card[data-semantic-state='loading']").innerText())
       .not.toMatch(/\b\d{1,3}%/);
   } finally {
@@ -386,7 +617,7 @@ test("reports meaning-model loading as indeterminate", async ({ page, runtime })
   }
 
   await expect(page.locator("[data-semantic-state='error']").first()).toBeVisible({ timeout: 20_000 });
-  await expect(page.locator(".candidate-rail button").first()).toBeVisible();
+  await expect(page.locator(".family-candidate").first()).toBeVisible();
 });
 
 test("restores a draft with a safe anchor and clears stale OOV results", async ({ page }) => {
@@ -409,8 +640,34 @@ test("restores a draft with a safe anchor and clears stale OOV results", async (
   await expect(
     page.getByText("No local pronunciation found for “blorptastic”", { exact: true }),
   ).toBeVisible({ timeout: 20_000 });
-  await expect(page.locator(".candidate-rail button")).toHaveCount(0);
+  await expect(page.locator(".family-candidate")).toHaveCount(0);
   await expect(page.locator(".empty-results")).toBeVisible();
+});
+
+test("makes the Reach control change the explored sound families", async ({ page }) => {
+  await page.goto(appPath("/"));
+  await waitForStudio(page);
+  await page.getByLabel("List view").click();
+  const reach = page.getByLabel("Rhyme adventurousness");
+
+  await reach.fill("0");
+  await expect(reach).toHaveAttribute("aria-valuetext", /Close, 0% reach/);
+  await expect.poll(async () => page.locator(".full-list .result-word").evaluateAll(
+    (nodes) => nodes.slice(0, 10).map((node) => node.firstChild?.textContent?.trim() ?? ""),
+  )).not.toEqual([]);
+  const close = await page.locator(".full-list .result-word").evaluateAll(
+    (nodes) => nodes.slice(0, 10).map((node) => node.firstChild?.textContent?.trim() ?? ""),
+  );
+
+  await reach.fill("100");
+  await expect(reach).toHaveAttribute("aria-valuetext", /Far out, 100% reach/);
+  await expect.poll(async () => page.locator(".full-list .result-word").evaluateAll(
+    (nodes) => nodes.slice(0, 10).map((node) => node.firstChild?.textContent?.trim() ?? ""),
+  )).not.toEqual(close);
+  const far = await page.locator(".full-list .result-word").evaluateAll(
+    (nodes) => nodes.slice(0, 10).map((node) => node.firstChild?.textContent?.trim() ?? ""),
+  );
+  expect(far.filter((word) => close.includes(word)).length).toBeLessThan(close.length);
 });
 
 test("bounds malformed persisted project fields without opting into meaning", async ({ page, runtime }) => {
@@ -466,6 +723,82 @@ test("bounds malformed persisted project fields without opting into meaning", as
   });
 });
 
+test("keeps family exploration and explanations complete on small monitors", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(appPath("/"));
+  await waitForStudio(page);
+
+  const dialectProfile = page.getByRole("button", { name: /Pronunciation profile: UK non-rhotic beta/i });
+  await expect(dialectProfile).toBeVisible();
+  await dialectProfile.click();
+  await expect(page.getByRole("button", { name: /Pronunciation profile: General American/i })).toBeVisible();
+  await page.getByRole("button", { name: /Pronunciation profile: General American/i }).click();
+
+  await expect(page.getByLabel("Family view")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("heading", { name: "Locked landings" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Vowel & slant" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Consonant echoes" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Phrase & mosaic" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Meaning & sideways" })).toBeVisible();
+  await expect(page.getByLabel("Balance sound and meaning")).toBeVisible();
+  await expect(page.getByLabel("Rhyme adventurousness")).toBeVisible();
+  await expect(page.getByText("Sound only", { exact: true })).toBeVisible();
+  await expect(page.getByText("Open", { exact: true })).toBeVisible();
+
+  await expect.poll(async () => page.locator(".family-channel > header > span").evaluateAll(
+    (counts) => counts.reduce((total, count) => total + Number(count.textContent ?? 0), 0),
+  )).toBeGreaterThan(18);
+
+  const initialExplorer = await page.locator(".explore-panel").boundingBox();
+  expect(initialExplorer).not.toBeNull();
+  await page.getByRole("button", { name: "Focus" }).click();
+  await expect(page.locator(".draft-panel")).not.toBeVisible();
+  const focusedExplorer = await page.locator(".explore-panel").boundingBox();
+  expect(focusedExplorer).not.toBeNull();
+  expect(focusedExplorer!.width).toBeGreaterThan(initialExplorer!.width + 300);
+
+  const firstFamilyCandidate = page.locator(".family-candidate").first();
+  await firstFamilyCandidate.click();
+  await expect(page.locator(".inspector-panel")).toBeVisible();
+  await expect(page.locator(".inspector-panel .definition")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Close candidate details" })).toBeVisible();
+  await page.getByRole("button", { name: "Close candidate details" }).click();
+  await expect(page.locator(".inspector-panel")).not.toBeVisible();
+  await page.getByRole("button", { name: "Show draft" }).click();
+
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await expect(page.getByLabel("Rhyme adventurousness")).toBeVisible();
+  await expect(page.getByLabel("Family view")).toBeVisible();
+  await expect(page.getByLabel("Map view")).toBeVisible();
+  await expect(page.getByLabel("List view")).toBeVisible();
+  await expect(page.locator(".inspector-panel")).not.toBeVisible();
+  await page.locator(".family-candidate").first().click();
+  await expect(page.locator(".inspector-panel .reason-chips")).toBeVisible();
+  await page.getByRole("button", { name: "Close candidate details" }).click();
+
+  await page.getByRole("button", { name: "Filters" }).click();
+  const syllableFilter = page.getByLabel("Syllables");
+  const partOfSpeechFilter = page.getByLabel("Part of speech");
+  let foundEmptyFilterCombination = false;
+  for (const syllables of ["4", "3", "2", "1"]) {
+    for (const partOfSpeech of ["adverb", "verb", "adjective", "noun"]) {
+      await syllableFilter.selectOption(syllables);
+      await partOfSpeechFilter.selectOption(partOfSpeech);
+      if (await page.locator(".empty-results").isVisible()) {
+        foundEmptyFilterCombination = true;
+        break;
+      }
+    }
+    if (foundEmptyFilterCombination) break;
+  }
+  expect(foundEmptyFilterCombination, "the filter matrix should include an empty slice").toBe(true);
+  await expect(page.getByText("No neighbours match these filters.", { exact: true })).toBeVisible();
+  await expect(page.locator(".inspector-panel h1")).toHaveCount(0);
+  await expect(page.locator(".mobile-candidate-actions")).toHaveCount(0);
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await expect(page.locator(".family-candidate").first()).toBeVisible();
+});
+
 test("keeps insertion available at tablet and phone widths", async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   await page.goto(appPath("/"));
@@ -474,6 +807,10 @@ test("keeps insertion available at tablet and phone widths", async ({ page }) =>
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "Explore", exact: true }).click();
+  await expect(page.getByLabel("Family view")).toBeVisible();
+  await expect(page.getByLabel("Map view")).toBeVisible();
+  await expect(page.getByLabel("List view")).toBeVisible();
+  await expect(page.getByLabel("Rhyme adventurousness")).toBeVisible();
   const insert = page.locator(".mobile-candidate-actions .mobile-insert");
   await expect(insert).toBeVisible();
   const bounds = await insert.boundingBox();
@@ -493,4 +830,13 @@ test("publishes complete third-party notices", async ({ page }) => {
   const response = await page.request.get(appPath("/licenses/ONNX-Runtime-ThirdPartyNotices.txt"));
   expect(response.ok()).toBeTruthy();
   expect((await response.text()).length).toBeGreaterThan(300_000);
+  const runtimeLink = page.getByRole("link", { name: /Web runtime licences/ });
+  await expect(runtimeLink).toHaveAttribute("href", appPath("/licenses/Web-Runtime-Licences.txt"));
+  const runtimeResponse = await page.request.get(appPath("/licenses/Web-Runtime-Licences.txt"));
+  expect(runtimeResponse.ok()).toBeTruthy();
+  const runtimeNotices = await runtimeResponse.text();
+  expect(runtimeNotices).toContain("React and React DOM");
+  expect(runtimeNotices).toContain("Next.js");
+  expect(runtimeNotices).toContain("Lucide");
+  expect(runtimeNotices).toContain("@huggingface/jinja");
 });

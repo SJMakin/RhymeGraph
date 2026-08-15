@@ -10,9 +10,11 @@ const licenceFiles = [
   ["Apache License 2.0", "/licenses/Apache-2.0.txt"],
   ["CMU Pronouncing Dictionary", "/licenses/cmudict-upstream.txt"],
   ["CMU npm wrapper (ISC)", "/licenses/cmu-pronouncing-dictionary-ISC.txt"],
+  ["SUBTLEX word frequencies (ISC)", "/licenses/SUBTLEX-word-frequencies-ISC.txt"],
   ["WordNet 3.0 terms", "/licenses/WordNet-3.0.txt"],
   ["ONNX Runtime (MIT)", "/licenses/ONNX-Runtime-MIT.txt"],
   ["ONNX Runtime third-party notices", "/licenses/ONNX-Runtime-ThirdPartyNotices.txt"],
+  ["Web runtime licences (React, Next.js, Lucide, Jinja)", "/licenses/Web-Runtime-Licences.txt"],
 ] as const;
 
 export default function NoticesPage() {
@@ -31,17 +33,32 @@ export default function NoticesPage() {
         <p>
           The compact pronunciation pack derives from the Carnegie Mellon University
           Pronouncing Dictionary through the ISC-licensed <code>cmu-pronouncing-dictionary</code>
-          package. WordNet indexes are used at build time for lemma and part-of-speech metadata.
-          A small set of clearly authored slang pronunciations and phrase fixtures is added by RhymeGraph.
+          package. WordNet indexes provide lemma and part-of-speech metadata, while
+          SUBTLEX-US spoken-frequency counts retain common inflections and improve utility ranking;
+          they are not pronunciation or dialect data. RhymeGraph adds a small, transparent set of
+          slang/reference pronunciations, eight pack fixtures, and 151 ordinary performance-phrase
+          building blocks composed from the word lexicon. None is extracted from lyrics or an artist corpus.
         </p>
       </section>
 
       <section>
         <h2>On-device meaning</h2>
         <p>
-          Semantic reranking uses <code>sentence-transformers/all-MiniLM-L6-v2</code>,
-          Transformers.js 4.2.0, and ONNX Runtime Web. The model, tokenizer, runtime,
-          and WASM backend are bundled locally; remote model fallback is disabled.
+          Semantic retrieval uses <code>sentence-transformers/all-MiniLM-L6-v2</code>,
+          Transformers.js 4.2.0, ONNX Runtime Web, and a RhymeGraph-built int8 index
+          of bounded WordNet gloss/POS documents. WordNet also supplies a bounded primary
+          definition when available. The model, tokenizer, index, runtime, and WASM backend
+          are bundled locally; remote model fallback is disabled.
+        </p>
+      </section>
+
+      <section>
+        <h2>Application runtime</h2>
+        <p>
+          The static interface includes React, React DOM, Next.js, and Lucide icons.
+          The semantic worker also bundles the MIT-licensed <code>@huggingface/jinja</code>
+          parser used by Transformers.js. Their copyright notices and licence texts are
+          included with the data, model, and ONNX notices below.
         </p>
       </section>
 

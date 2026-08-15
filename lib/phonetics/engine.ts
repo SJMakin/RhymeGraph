@@ -14,6 +14,8 @@ import type {
   RhymeEngine,
   Stress,
 } from "./types";
+import { pronunciationForDialect } from "./dialect";
+import { createRhymeRetrievalIndex } from "./retrieval";
 
 const VOWELS = new Set([
   "AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY",
@@ -183,21 +185,71 @@ function stressSimilarity(left: readonly Stress[], right: readonly Stress[]): nu
   );
 }
 
-function rhymeStart(pronunciation: Pronunciation): number {
-  let fallback = 0;
-  for (let index = pronunciation.phonemes.length - 1; index >= 0; index -= 1) {
-    const phone = pronunciation.phonemes[index];
-    if (phone.type === "vowel") {
-      if (fallback === 0) fallback = index;
-      if (phone.stress === 1) return index;
-    }
-  }
-  return fallback;
+interface RhymeWindow {
+  start: number;
+  end: number;
+  phonemes: readonly Phoneme[];
+  vowels: readonly Phoneme[];
+  syllables: number;
+  coverage: number;
 }
 
-function scorePronunciations(left: Pronunciation, right: Pronunciation): RhymeComponents {
-  const leftTail = left.phonemes.slice(rhymeStart(left));
-  const rightTail = right.phonemes.slice(rhymeStart(right));
+interface ScoredPronunciations {
+  components: RhymeComponents;
+  depth: number;
+  matchedSpan: {
+    left: readonly [number, number];
+    right: readonly [number, number];
+  };
+}
+
+const MAX_RHYME_WINDOW_SYLLABLES = 6;
+const RHYME_WINDOW_CACHE = new WeakMap<Pronunciation, RhymeWindow[]>();
+
+function syllableWeight(stress: Stress | null): number {
+  if (stress === 1) return 1;
+  if (stress === 2) return .72;
+  return .28;
+}
+
+function suffixWindows(pronunciation: Pronunciation): RhymeWindow[] {
+  const cached = RHYME_WINDOW_CACHE.get(pronunciation);
+  if (cached) return cached;
+  const vowelIndexes = pronunciation.phonemes.flatMap((phone, index) =>
+    phone.type === "vowel" ? [index] : []);
+  const available = vowelIndexes.slice(-MAX_RHYME_WINDOW_SYLLABLES);
+  const totalWeight = available.reduce(
+    (total, index) => total + syllableWeight(pronunciation.phonemes[index].stress),
+    0,
+  );
+  const windows = available.map((start, index) => {
+    const vowels = pronunciation.phonemes
+      .slice(start)
+      .filter((phone) => phone.type === "vowel");
+    const coveredWeight = vowels.reduce(
+      (total, phone) => total + syllableWeight(phone.stress),
+      0,
+    );
+    return {
+      start,
+      end: pronunciation.phonemes.length,
+      phonemes: pronunciation.phonemes.slice(start),
+      vowels,
+      syllables: available.length - index,
+      coverage: coveredWeight / Math.max(totalWeight, Number.EPSILON),
+    };
+  });
+  RHYME_WINDOW_CACHE.set(pronunciation, windows);
+  return windows;
+}
+
+function scoreWindows(
+  left: RhymeWindow,
+  right: RhymeWindow,
+  phraseInvolved: boolean,
+): RhymeComponents {
+  const leftTail = left.phonemes;
+  const rightTail = right.phonemes;
   const leftVowels = leftTail.filter((phone) => phone.type === "vowel");
   const rightVowels = rightTail.filter((phone) => phone.type === "vowel");
   const leftConsonants = leftTail.filter((phone) => phone.type === "consonant");
@@ -227,21 +279,80 @@ function scorePronunciations(left: Pronunciation, right: Pronunciation): RhymeCo
   const consonanceWeight = hasConsonanceEvidence ? .2 : 0;
   const codaWeight = hasCodaEvidence ? .14 : 0;
   const weightTotal = .4 + consonanceWeight + codaWeight + .16 + .1;
-  const phonetic = (
+  const basePhonetic = (
     .4 * assonance +
     consonanceWeight * consonance +
     codaWeight * coda +
     .16 * fullTail +
     .1 * stress
   ) / weightTotal;
+  const coverage = 2 * left.coverage * right.coverage /
+    Math.max(Number.EPSILON, left.coverage + right.coverage);
+  const balance = Math.min(left.syllables, right.syllables) /
+    Math.max(left.syllables, right.syllables);
+  // A short exact suffix remains useful, but it no longer masquerades as a
+  // complete phrase rhyme when one side contains another salient beat. Longer
+  // vowel chains earn an explicit, bounded reward.
+  // Phrase comparisons demand broader evidence: an exact final word is not by
+  // itself a better mosaic than a coherent chain spanning both phrases.
+  const coverageFactor = phraseInvolved
+    ? .25 + .75 * coverage
+    : .58 + .42 * coverage;
+  const balanceFactor = .86 + .14 * balance;
+  // Segment identity is not enough for a musical full match: inverted stress
+  // should stay useful, but it must not saturate the score merely because a
+  // longer vowel chain earned a depth reward.
+  const stressFactor = .9 + .1 * stress;
+  const depthReward = .09 * Math.max(0, Math.min(left.syllables, right.syllables) - 1) *
+    coverage * assonance * stress;
+  const weightedBase = basePhonetic * coverageFactor * balanceFactor * stressFactor;
+  // Reward depth only inside the remaining headroom. An imperfect two- or
+  // three-beat relationship must never become a synthetic 1.0 by addition.
+  const phonetic = clamp01(weightedBase + depthReward * (1 - weightedBase));
   return {
     assonance: roundScore(assonance),
     consonance: roundScore(consonance),
     coda: roundScore(coda),
     fullTail: roundScore(fullTail),
     stress: roundScore(stress),
+    coverage: roundScore(coverage),
+    balance: roundScore(balance),
     phonetic: roundScore(phonetic),
   };
+}
+
+function scorePronunciations(
+  left: Pronunciation,
+  right: Pronunciation,
+  phraseInvolved: boolean,
+): ScoredPronunciations {
+  let winner: ScoredPronunciations | undefined;
+  for (const leftWindow of suffixWindows(left)) {
+    for (const rightWindow of suffixWindows(right)) {
+      // Dropped syllables are useful; radically unbalanced windows are usually
+      // accidental vowel matches and create needless work.
+      if (Math.abs(leftWindow.syllables - rightWindow.syllables) > 1) continue;
+      const components = scoreWindows(leftWindow, rightWindow, phraseInvolved);
+      const candidate: ScoredPronunciations = {
+        components,
+        depth: Math.min(leftWindow.syllables, rightWindow.syllables),
+        matchedSpan: {
+          left: [leftWindow.start, leftWindow.end],
+          right: [rightWindow.start, rightWindow.end],
+        },
+      };
+      if (
+        !winner ||
+        components.phonetic > winner.components.phonetic ||
+        (components.phonetic === winner.components.phonetic &&
+          components.coverage > winner.components.coverage) ||
+        (components.phonetic === winner.components.phonetic &&
+          components.coverage === winner.components.coverage &&
+          candidate.depth > winner.depth)
+      ) winner = candidate;
+    }
+  }
+  return winner!;
 }
 
 function comparisonLabels(
@@ -250,6 +361,7 @@ function comparisonLabels(
   components: RhymeComponents,
   leftPronunciation: Pronunciation,
   rightPronunciation: Pronunciation,
+  matchedSpan: ScoredPronunciations["matchedSpan"],
 ): RelationshipLabel[] {
   const labels: RelationshipLabel[] = [];
   const leftCodaLength = leftPronunciation.phonemes.length -
@@ -259,22 +371,37 @@ function comparisonLabels(
   const hasCodaEvidence = leftCodaLength > 0 && rightCodaLength > 0;
   const codaIsCompatible =
     (leftCodaLength === 0 && rightCodaLength === 0) || components.coda >= .94;
+  const suffixCoverageIsCompatible =
+    (left.kind === "word" && right.kind === "word") || components.coverage >= .86;
   if (components.assonance >= .64) labels.push("assonance");
   if (components.consonance >= .66 || (hasCodaEvidence && components.coda >= .78)) labels.push("consonance");
-  if (components.assonance >= .94 && codaIsCompatible && components.fullTail >= .88) labels.push("full-rhyme");
+  if (
+    components.assonance >= .94 &&
+    codaIsCompatible &&
+    components.fullTail >= .94 &&
+    components.stress >= .7 &&
+    suffixCoverageIsCompatible &&
+    components.balance >= .8
+  ) labels.push("full-rhyme");
   else if (components.phonetic >= .45) labels.push("slant");
   const matchedVowels = Math.min(
-    leftPronunciation.phonemes.slice(rhymeStart(leftPronunciation)).filter((phone) => phone.type === "vowel").length,
-    rightPronunciation.phonemes.slice(rhymeStart(rightPronunciation)).filter((phone) => phone.type === "vowel").length,
+    leftPronunciation.phonemes.slice(...matchedSpan.left).filter((phone) => phone.type === "vowel").length,
+    rightPronunciation.phonemes.slice(...matchedSpan.right).filter((phone) => phone.type === "vowel").length,
   );
   if (matchedVowels >= 2 && components.assonance >= .52) labels.push("multi-syllabic");
-  if (left.kind !== right.kind && components.phonetic >= .5) labels.push("mosaic");
+  const crossesWords = (pronunciation: Pronunciation, span: readonly [number, number]) =>
+    new Set(pronunciation.phonemes.slice(...span).map((phone) => phone.wordIndex)).size > 1;
+  if (
+    components.phonetic >= .5 &&
+    (crossesWords(leftPronunciation, matchedSpan.left) ||
+      crossesWords(rightPronunciation, matchedSpan.right))
+  ) labels.push("mosaic");
   return labels;
 }
 
-function phonemeNames(pronunciation: Pronunciation): string {
+function phonemeNames(pronunciation: Pronunciation, span: readonly [number, number]): string {
   return pronunciation.phonemes
-    .slice(rhymeStart(pronunciation))
+    .slice(...span)
     .filter((phone) => phone.type === "vowel")
     .map((phone) => phone.symbol)
     .join(" → ");
@@ -284,15 +411,21 @@ function comparisonExplanation(
   left: Pronunciation,
   right: Pronunciation,
   components: RhymeComponents,
+  matchedSpan: ScoredPronunciations["matchedSpan"],
 ): string[] {
   const explanations: string[] = [];
-  if (components.assonance >= .82) explanations.push(`Strong stressed-vowel relationship (${phonemeNames(left)} ↔ ${phonemeNames(right)}).`);
+  if (components.assonance >= .82 && components.stress >= .7) explanations.push(`Strong stressed-vowel relationship (${phonemeNames(left, matchedSpan.left)} ↔ ${phonemeNames(right, matchedSpan.right)}).`);
+  else if (components.assonance >= .82) explanations.push(`The vowel sequence matches, but the emphasis falls differently (${phonemeNames(left, matchedSpan.left)} ↔ ${phonemeNames(right, matchedSpan.right)}).`);
   else if (components.assonance >= .5) explanations.push("Related vowel shape creates loose assonance.");
   const leftHasCoda = left.phonemes.slice(left.phonemes.findLastIndex((phone) => phone.type === "vowel") + 1).length > 0;
   const rightHasCoda = right.phonemes.slice(right.phonemes.findLastIndex((phone) => phone.type === "vowel") + 1).length > 0;
   if (leftHasCoda && rightHasCoda && components.coda >= .82) explanations.push("The final consonant coda is strongly preserved.");
   else if (components.consonance >= .62) explanations.push("Consonant patterning supports the rhyme despite a looser ending.");
   if (components.stress >= .8) explanations.push("Stress and syllable emphasis align.");
+  if (components.coverage >= .9 && Math.min(
+    left.phonemes.slice(...matchedSpan.left).filter((phone) => phone.type === "vowel").length,
+    right.phonemes.slice(...matchedSpan.right).filter((phone) => phone.type === "vowel").length,
+  ) >= 3) explanations.push("The relationship carries across an extended syllable window.");
   if (explanations.length === 0) explanations.push("A weak phonetic edge; useful mainly for adventurous pivots.");
   return explanations;
 }
@@ -301,26 +434,30 @@ function bestComparison(
   left: PhoneticItem,
   right: PhoneticItem,
   fixedRightPronunciation?: Pronunciation,
+  dialect: "en-US" | "en-GB" = "en-US",
 ): RhymeComparison {
   let winner: RhymeComparison | undefined;
   const rightPronunciations = fixedRightPronunciation
     ? [fixedRightPronunciation]
     : right.pronunciations;
-  for (const leftPronunciation of left.pronunciations) {
-    for (const rightPronunciation of rightPronunciations) {
-      const components = scorePronunciations(leftPronunciation, rightPronunciation);
+  for (const sourceLeftPronunciation of left.pronunciations) {
+    for (const sourceRightPronunciation of rightPronunciations) {
+      const leftPronunciation = pronunciationForDialect(sourceLeftPronunciation, dialect);
+      const rightPronunciation = pronunciationForDialect(sourceRightPronunciation, dialect);
+      const components = scorePronunciations(
+        leftPronunciation,
+        rightPronunciation,
+        left.kind === "phrase" || right.kind === "phrase",
+      );
       const candidate: RhymeComparison = {
         left,
         right,
         leftPronunciation,
         rightPronunciation,
-        components,
-        labels: comparisonLabels(left, right, components, leftPronunciation, rightPronunciation),
-        matchedSpan: {
-          left: [rhymeStart(leftPronunciation), leftPronunciation.phonemes.length],
-          right: [rhymeStart(rightPronunciation), rightPronunciation.phonemes.length],
-        },
-        explanation: comparisonExplanation(leftPronunciation, rightPronunciation, components),
+        components: components.components,
+        labels: comparisonLabels(left, right, components.components, leftPronunciation, rightPronunciation, components.matchedSpan),
+        matchedSpan: components.matchedSpan,
+        explanation: comparisonExplanation(leftPronunciation, rightPronunciation, components.components, components.matchedSpan),
       };
       if (!winner || candidate.components.phonetic > winner.components.phonetic) winner = candidate;
     }
@@ -346,6 +483,8 @@ function aggregateFamily(comparisons: readonly RhymeComparison[]): FamilyCompone
     coda: roundScore(component("coda")),
     fullTail: roundScore(component("fullTail")),
     stress: roundScore(component("stress")),
+    coverage: roundScore(component("coverage")),
+    balance: roundScore(component("balance")),
     phonetic: roundScore(component("phonetic")),
     mean: roundScore(mean),
     weakest: roundScore(weakest),
@@ -353,12 +492,30 @@ function aggregateFamily(comparisons: readonly RhymeComparison[]): FamilyCompone
   };
 }
 
-function intentSoundScore(intent: RecommendationIntent, family: FamilyComponents): number {
-  if (intent === "continue") return family.consistency;
-  if (intent === "bridge") return .75 * family.mean + .25 * family.weakest;
-  // A pivot should be recognizably connected but not another near-duplicate.
-  const distanceFromUsefulPivot = Math.abs(family.mean - .58);
-  return clamp01(1 - distanceFromUsefulPivot / .58);
+function intentSoundScore(intent: RecommendationIntent, family: FamilyComponents, reach: number): number {
+  const target = 1 - .46 * reach;
+  const targetAffinity = clamp01(1 - Math.abs(family.mean - target) / (.3 + .18 * reach));
+  if (intent === "continue") {
+    const fidelity = .62 * family.consistency + .18 * family.fullTail +
+      .12 * family.stress + .08 * family.coverage;
+    const exploration = .46 * targetAffinity + .3 * family.assonance +
+      .14 * family.balance + .1 * family.consonance;
+    return (1 - .72 * reach) * fidelity + .72 * reach * exploration;
+  }
+  if (intent === "bridge") {
+    const fidelity = .75 * family.mean + .25 * family.weakest;
+    const exploration = .5 * targetAffinity + .3 * family.assonance + .2 * family.balance;
+    return (1 - .6 * reach) * fidelity + .6 * reach * exploration;
+  }
+  // Pivot always seeks a recognisable neighbouring family, even at minimum
+  // Reach. Reach then moves that target farther away; vowel/consonant evidence
+  // prevents a merely remote word from winning because it hit the score band.
+  const pivotTarget = .62 - .18 * reach;
+  const pivotAffinity = clamp01(
+    1 - Math.abs(family.mean - pivotTarget) / (.3 + .18 * reach),
+  );
+  const connection = .55 + .45 * Math.max(family.assonance, family.consonance);
+  return pivotAffinity * connection;
 }
 
 function collectLabels(comparisons: readonly RhymeComparison[], intent: RecommendationIntent, semantic: number): RelationshipLabel[] {
@@ -398,9 +555,101 @@ function lexicalCompare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
+function writingUtility(item: PhoneticItem): number {
+  // CMU/SUBTLEX legitimately contain spoken abbreviations such as MR/DR/SR,
+  // but bare consonant spellings are rarely useful as surfaced lyric words.
+  // Keep them searchable while preventing corpus frequency from making them
+  // dominate a neighbourhood intended for writing.
+  const opaqueAbbreviation = item.kind === "word" &&
+    /^[a-z]{2,4}$/.test(item.normalized) &&
+    !/[aeiouy]/.test(item.normalized);
+  return opaqueAbbreviation ? item.frequency * .25 : item.frequency;
+}
+
+const ULTRA_SHORT_FUNCTION_WORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "but", "by", "do", "for",
+  "from", "had", "has", "he", "her", "him", "his", "i", "if", "in", "is",
+  "it", "me", "my", "no", "not", "of", "on", "or", "our", "she", "so",
+  "than", "that", "the", "their", "them", "then", "they", "this", "to", "up",
+  "us", "was", "we", "were", "what", "when", "where", "which", "who", "why",
+  "will", "with", "you", "your",
+]);
+
+function recommendationFamilySignature(recommendation: Recommendation): string {
+  const signatures = recommendation.anchorComparisons.map((comparison) => {
+    const phones = comparison.rightPronunciation.phonemes
+      .slice(...comparison.matchedSpan.right);
+    const vowels = phones
+      .filter((phone) => phone.type === "vowel")
+      .map((phone) => phone.symbol);
+    const finalVowel = phones.findLastIndex((phone) => phone.type === "vowel");
+    const coda = phones.slice(finalVowel + 1)
+      .filter((phone) => phone.type === "consonant")
+      .map((phone) => phone.symbol);
+    return `${vowels.join("-")}|${coda.join("-")}`;
+  });
+  return [...new Set(signatures)].sort(lexicalCompare).join("&");
+}
+
+function diversifyRecommendations(
+  recommendations: readonly Recommendation[],
+  reach: number,
+  limit: number,
+): readonly Recommendation[] {
+  if (reach === 0 || limit <= 0) return recommendations.slice(0, limit);
+  const output: Recommendation[] = [];
+  const selected = new Set<Recommendation>();
+  const familyCounts = new Map<string, number>();
+  const signatures = new Map(
+    recommendations.map((item) => [item, recommendationFamilySignature(item)]),
+  );
+  const diverseHead = Math.min(40, limit);
+  const familyQuota = Math.max(2, Math.round(5 - 3 * reach));
+  const functionQuota = Math.max(2, Math.round(5 - 3 * reach));
+  const phraseQuota = reach < .18 ? 0 : Math.min(4, Math.max(1, Math.round(4 * reach)));
+  const phraseSlots = [9, 19, 29, 39].slice(0, phraseQuota)
+    .filter((slot) => slot < diverseHead);
+  const phraseCandidates = recommendations.filter((item) => item.item.kind === "phrase");
+  let functionWords = 0;
+
+  const select = (candidate: Recommendation) => {
+    selected.add(candidate);
+    output.push(candidate);
+    const signature = signatures.get(candidate)!;
+    familyCounts.set(signature, (familyCounts.get(signature) ?? 0) + 1);
+    if (ULTRA_SHORT_FUNCTION_WORDS.has(candidate.item.normalized)) functionWords += 1;
+  };
+
+  for (let slot = 0; slot < Math.min(limit, recommendations.length); slot += 1) {
+    if (phraseSlots.includes(slot)) {
+      const phrase = phraseCandidates.find((candidate) => !selected.has(candidate));
+      if (phrase) {
+        select(phrase);
+        continue;
+      }
+    }
+    const candidate = recommendations.find((item) => {
+      if (selected.has(item)) return false;
+      if (slot >= diverseHead) return true;
+      const familyCount = familyCounts.get(signatures.get(item)!) ?? 0;
+      if (familyCount >= familyQuota) return false;
+      if (
+        slot < 20 &&
+        ULTRA_SHORT_FUNCTION_WORDS.has(item.item.normalized) &&
+        functionWords >= functionQuota
+      ) return false;
+      return true;
+    }) ?? recommendations.find((item) => !selected.has(item));
+    if (!candidate) break;
+    select(candidate);
+  }
+  return output;
+}
+
 export function createRhymeEngine(entries: readonly LexiconEntryInput[]): RhymeEngine {
   const explicitItems = entries.map(entryToItem);
   const itemMap = new Map(explicitItems.map((item) => [item.normalized, item]));
+  const retrievalIndex = createRhymeRetrievalIndex(explicitItems);
 
   const represent = (text: string): PhoneticItem | undefined => {
     const normalized = normalizeText(text);
@@ -434,8 +683,12 @@ export function createRhymeEngine(entries: readonly LexiconEntryInput[]): RhymeE
   };
 
   const recommend = (request: RecommendationRequest): readonly Recommendation[] => {
-    const anchors = request.anchors.map(represent).filter((item): item is PhoneticItem => Boolean(item));
-    if (anchors.length === 0) return [];
+    const representedAnchors = request.anchors.map(represent);
+    if (
+      representedAnchors.length === 0 ||
+      representedAnchors.some((item) => !item)
+    ) return [];
+    const anchors = representedAnchors as PhoneticItem[];
     const excluded = new Set([
       ...anchors.map((item) => item.normalized),
       ...(request.exclude ?? []).map(normalizeText),
@@ -448,19 +701,30 @@ export function createRhymeEngine(entries: readonly LexiconEntryInput[]): RhymeE
     const weightTotal = weights.sound + weights.meaning + weights.utility || 1;
     const semanticScores = request.semanticScores ?? {};
     const minPhonetic = request.minPhonetic ?? (request.intent === "pivot" ? .32 : .45);
+    const reach = clamp01(request.reach ?? 0);
+    const dialect = request.dialect ?? "en-US";
     const recommendations: Recommendation[] = [];
+    const searchableItems = request.candidatePool === "exhaustive"
+      ? explicitItems
+      : retrievalIndex.shortlist({
+        anchors,
+        reach,
+        dialect,
+        semanticTerms: Object.keys(semanticScores),
+      });
 
-    for (const item of explicitItems) {
+    for (const item of searchableItems) {
       if (excluded.has(item.normalized)) continue;
       // A spelling with multiple pronunciations must choose one reading for the
       // whole pinned family. Otherwise an ambiguous word such as “bow” can use
       // /boʊ/ against “flow” and /baʊ/ against “now” simultaneously.
       let pronunciation = item.pronunciations[0];
-      let anchorComparisons = anchors.map((anchor) => bestComparison(anchor, item, pronunciation));
+      let anchorComparisons = anchors.map((anchor) =>
+        bestComparison(anchor, item, pronunciation, dialect));
       let family = aggregateFamily(anchorComparisons);
       for (const candidatePronunciation of item.pronunciations.slice(1)) {
         const candidateComparisons = anchors.map((anchor) =>
-          bestComparison(anchor, item, candidatePronunciation),
+          bestComparison(anchor, item, candidatePronunciation, dialect),
         );
         const candidateFamily = aggregateFamily(candidateComparisons);
         if (
@@ -483,12 +747,12 @@ export function createRhymeEngine(entries: readonly LexiconEntryInput[]): RhymeE
         typeof rawSemantic === "number" && Number.isFinite(rawSemantic)
           ? clamp01(rawSemantic)
           : 0;
-      const utility = item.frequency;
-      const sound = intentSoundScore(request.intent, family);
+      const utility = writingUtility(item);
+      const sound = intentSoundScore(request.intent, family, reach);
       const score = roundScore((weights.sound * sound + weights.meaning * semantic + weights.utility * utility) / weightTotal);
       recommendations.push({
         item,
-        pronunciation,
+        pronunciation: pronunciationForDialect(pronunciation, dialect),
         intent: request.intent,
         score,
         family,
@@ -500,7 +764,7 @@ export function createRhymeEngine(entries: readonly LexiconEntryInput[]): RhymeE
       });
     }
     recommendations.sort((left, right) => right.score - left.score || lexicalCompare(left.item.normalized, right.item.normalized));
-    return recommendations.slice(0, request.limit ?? 20);
+    return diversifyRecommendations(recommendations, reach, request.limit ?? 20);
   };
 
   return { items: explicitItems, represent, compare, recommend };

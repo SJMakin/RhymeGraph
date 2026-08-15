@@ -66,7 +66,7 @@ export const DEMO_CANDIDATES: CandidateView[] = [
     flow: 91,
     syllables: 3,
     relation: "assonance",
-    reasons: ["shared opening vowel", "falling cadence", "strong image word"],
+    reasons: ["shared vowel movement", "related stress shape", "strong image word"],
   },
   {
     id: "tragedy",
@@ -105,7 +105,7 @@ export const DEMO_CANDIDATES: CandidateView[] = [
     flow: 86,
     syllables: 3,
     relation: "consonance",
-    reasons: ["matching cadence", "consonant echoes", "fits motion context"],
+    reasons: ["matching stress shape", "consonant echoes", "fits motion context"],
   },
   {
     id: "salary",
@@ -144,7 +144,7 @@ export const DEMO_CANDIDATES: CandidateView[] = [
     flow: 76,
     syllables: 4,
     relation: "assonance",
-    reasons: ["vowel sequence", "extended cadence", "delivery-friendly"],
+    reasons: ["vowel sequence", "extended stress pattern", "delivery-friendly"],
   },
   {
     id: "have-at-me",

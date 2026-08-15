@@ -112,7 +112,7 @@
           "uniqueItems": true
         },
         "intent": { "enum": ["continue", "bridge", "pivot"] },
-        "dialect": { "type": "string", "minLength": 1 },
+        "dialect": { "enum": ["en-US", "en-GB"] },
         "expectedAnchorCoverage": { "type": "boolean" },
         "notes": { "type": "string" },
         "judgements": {

@@ -14,7 +14,7 @@ import { createRhymeEngine } from "../lib/phonetics/engine.ts";
 const DEFAULT_OUTPUT = resolve("outputs/evaluation-report.json");
 
 function usage() {
-  return `Usage: node --experimental-strip-types scripts/evaluate.mjs [options]
+  return `Usage: npx tsx scripts/evaluate.mjs [options]
 
 Options:
   --dataset PATH   Scenario dataset (default: evaluation/scenarios.v1.json)

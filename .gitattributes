@@ -1,0 +1,9 @@
+# Keep generated artefacts byte-stable across Windows and Linux checkouts.
+public/data/*.json text eol=lf
+evaluation/*.json text eol=lf
+public/models/**/*.json text eol=lf
+public/models/**/*.txt text eol=lf
+public/workers/**/*.js text eol=lf
+public/data/*.bin -text
+public/models/**/*.onnx -text
+public/workers/**/*.wasm -text

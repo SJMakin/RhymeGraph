@@ -2,18 +2,28 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import { createRhymeEngine, normalizeText } from "../lib/phonetics/engine.ts";
+import { pronunciationForDialect } from "../lib/phonetics/dialect.ts";
+import { composePerformancePhraseEntries } from "../lib/phonetic-search/performance-phrases.ts";
 
 export const SCENARIO_SCHEMA_VERSION = "rhymegraph.evaluation-scenarios.v1";
 export const EVALUATION_REPORT_VERSION = "rhymegraph.evaluation-report.v1";
 export const BASELINE_ID = "stressed-vowel-suffix-v1";
-export const CURRENT_ENGINE_ID = "rhymegraph-phonetic-v0.1";
+export const CURRENT_ENGINE_ID = "rhymegraph-phonetic-v0.3";
 
 export const DEFAULT_SCENARIO_URL = new URL("./scenarios.v1.json", import.meta.url);
 export const DEFAULT_LEXICON_URL = new URL("../public/data/cmudict.compact.json", import.meta.url);
 export const ENGINE_SOURCE_URL = new URL("../lib/phonetics/engine.ts", import.meta.url);
+export const ENGINE_SOURCE_URLS = [
+  ENGINE_SOURCE_URL,
+  new URL("../lib/phonetics/retrieval.ts", import.meta.url),
+  new URL("../lib/phonetics/dialect.ts", import.meta.url),
+  new URL("../lib/phonetics/types.ts", import.meta.url),
+  new URL("../lib/phonetic-search/performance-phrases.ts", import.meta.url),
+];
 export const EVALUATOR_SOURCE_URL = new URL("./core.mjs", import.meta.url);
 
 const INTENTS = new Set(["continue", "bridge", "pivot"]);
+const DIALECTS = new Set(["en-US", "en-GB"]);
 const GRADES = new Set([0, 1, 2]);
 const CATEGORIES = new Set([
   "full-rhyme",
@@ -167,8 +177,8 @@ export function validateDataset(dataset) {
       `${path}.context must be non-empty for Bridge intent.`);
     pushIf(errors, !Array.isArray(scenario.pins), `${path}.pins must be an array.`);
     pushIf(errors, !INTENTS.has(scenario.intent), `${path}.intent is unsupported.`);
-    pushIf(errors, typeof scenario.dialect !== "string" || scenario.dialect.trim() === "",
-      `${path}.dialect must be a non-empty string.`);
+    pushIf(errors, !DIALECTS.has(scenario.dialect),
+      `${path}.dialect must be en-US or en-GB.`);
     pushIf(errors, typeof scenario.expectedAnchorCoverage !== "boolean",
       `${path}.expectedAnchorCoverage must be boolean.`);
     pushIf(errors, !Array.isArray(scenario.judgements) || scenario.judgements.length < 3,
@@ -253,6 +263,16 @@ export function tagsFromMask(mask) {
   return tags;
 }
 
+function tagsFromEntryFlags(flags, definitions = {}) {
+  const tags = [];
+  if (definitions.spoken && (flags & definitions.spoken) !== 0) tags.push("spoken-corpus");
+  if (definitions.authored && (flags & definitions.authored) !== 0) tags.push("authored-pronunciation");
+  if (definitions.slang && (flags & definitions.slang) !== 0) tags.push("slang");
+  if (definitions.reference && (flags & definitions.reference) !== 0) tags.push("reference");
+  if (definitions.uk && (flags & definitions.uk) !== 0) tags.push("en-GB");
+  return tags;
+}
+
 export function lexiconEntriesFromPack(pack) {
   if (!isPlainObject(pack) || typeof pack.version !== "string" || !Array.isArray(pack.entries) || !Array.isArray(pack.phrases)) {
     throw new Error("Compact lexicon is missing version, entries, or phrases.");
@@ -261,12 +281,14 @@ export function lexiconEntriesFromPack(pack) {
     if (!Array.isArray(entry) || entry.length < 4) {
       throw new Error(`Compact lexicon entry ${index} is malformed.`);
     }
-    const [text, pronunciations, partOfSpeechMask, senses] = entry;
+    const [text, pronunciations, partOfSpeechMask, senses, storedUtility, flags = 0] = entry;
     return {
       text,
       pronunciations,
-      frequency: utilityFromMetadata(text, senses),
-      tags: tagsFromMask(partOfSpeechMask),
+      frequency: storedUtility === undefined
+        ? utilityFromMetadata(text, senses)
+        : Math.max(0, Math.min(1, storedUtility / 1000)),
+      tags: [...tagsFromMask(partOfSpeechMask), ...tagsFromEntryFlags(flags, pack.entryFlags)],
     };
   });
   entries.push(...pack.phrases.map(([text, pronunciations]) => ({
@@ -276,6 +298,7 @@ export function lexiconEntriesFromPack(pack) {
     frequency: .58,
     tags: ["phrase"],
   })));
+  entries.push(...composePerformancePhraseEntries(entries));
   return entries;
 }
 
@@ -309,13 +332,17 @@ function simplePairScore(left, right) {
   return .6 * stressedVowelMatch + .4 * suffixRatio;
 }
 
-export function scoreSimpleBaseline(anchorItems, candidateItem) {
+export function scoreSimpleBaseline(anchorItems, candidateItem, dialect = "en-US") {
   if (anchorItems.some((item) => !item) || !candidateItem) return null;
   let winner = null;
-  for (const candidatePronunciation of candidateItem.pronunciations) {
+  for (const sourceCandidatePronunciation of candidateItem.pronunciations) {
+    const candidatePronunciation = pronunciationForDialect(sourceCandidatePronunciation, dialect);
     const scores = anchorItems.map((anchor) => Math.max(
-      ...anchor.pronunciations.map((anchorPronunciation) =>
-        simplePairScore(anchorPronunciation, candidatePronunciation)),
+      ...anchor.pronunciations.map((sourceAnchorPronunciation) =>
+        simplePairScore(
+          pronunciationForDialect(sourceAnchorPronunciation, dialect),
+          candidatePronunciation,
+        )),
     ));
     const mean = average(scores) ?? 0;
     const weakest = Math.min(...scores);
@@ -389,6 +416,7 @@ function currentScenarioScores(scenario, entryMap) {
   const recommendations = scenarioEngine.recommend({
     anchors,
     intent: scenario.intent,
+    dialect: scenario.dialect,
     minPhonetic: 0,
     limit: scenario.judgements.length,
     weights: { sound: 1, meaning: 0, utility: 0 },
@@ -412,7 +440,11 @@ function baselineScenarioScores(scenario, productionEngine) {
   return {
     anchorCovered,
     candidates: scenario.judgements.flatMap((judgement) => {
-      const result = scoreSimpleBaseline(anchorItems, productionEngine.represent(judgement.candidate));
+      const result = scoreSimpleBaseline(
+        anchorItems,
+        productionEngine.represent(judgement.candidate),
+        scenario.dialect,
+      );
       return result ? [{ candidate: judgement.candidate, ...result }] : [];
     }),
   };
@@ -502,10 +534,10 @@ export async function loadEvaluationInputs({
   scenarioUrl = DEFAULT_SCENARIO_URL,
   lexiconUrl = DEFAULT_LEXICON_URL,
 } = {}) {
-  const [scenarioFile, lexiconFile, engineSource, evaluatorSource] = await Promise.all([
+  const [scenarioFile, lexiconFile, engineSources, evaluatorSource] = await Promise.all([
     readVersionedJson(scenarioUrl),
     readVersionedJson(lexiconUrl),
-    readFile(ENGINE_SOURCE_URL),
+    Promise.all(ENGINE_SOURCE_URLS.map((url) => readFile(url))),
     readFile(EVALUATOR_SOURCE_URL),
   ]);
   const dataset = validateDataset(scenarioFile.value);
@@ -517,7 +549,7 @@ export async function loadEvaluationInputs({
     revisions: {
       scenarios: scenarioFile.revision,
       lexicon: lexiconFile.revision,
-      engine: digest(engineSource),
+      engine: digest(Buffer.concat(engineSources)),
       evaluator: digest(evaluatorSource),
     },
     bytes: {

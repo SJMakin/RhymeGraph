@@ -79,6 +79,10 @@ test("schema validation rejects leakage-prone split metadata and duplicate candi
   contextlessBridge.scenarios.find((scenario) => scenario.intent === "bridge").context = null;
   assert.throws(() => validateDataset(contextlessBridge), /context must be non-empty for Bridge/i);
 
+  const unsupportedDialect = structuredClone(inputs.dataset);
+  unsupportedDialect.scenarios[0].dialect = "global-english";
+  assert.throws(() => validateDataset(unsupportedDialect), /dialect must be en-US or en-GB/i);
+
   const inventedReviewer = structuredClone(inputs.dataset);
   inventedReviewer.judgement.reviewerCount = 1;
   assert.throws(() => validateDataset(inventedReviewer), /zero human reviewers/i);
@@ -310,9 +314,15 @@ test("a minimal sound benchmark records runtime, device, and both dataset revisi
   assert.match(report.quality.percentileInterpretation, /diagnostic only/i);
   assert.match(report.dataset.scenarioRevision, /^sha256:[a-f0-9]{64}$/);
   assert.match(report.dataset.lexiconRevision, /^sha256:[a-f0-9]{64}$/);
-  assert.equal(report.workloads.exhaustiveRecommendationPass.summary.samples, 1);
-  assert.ok(report.workloads.exhaustiveRecommendationQuery.summary.observedP95Ms > 0);
-  assert.equal("p95Ms" in report.workloads.exhaustiveRecommendationQuery.summary, false);
+  assert.equal(report.schemaVersion, "rhymegraph.sound-benchmark.v3");
+  assert.equal(report.configuration.recommendationProfile, "v0.3-browser-default-sound-only");
+  assert.equal(report.configuration.recommendationLimit, 96);
+  assert.equal(report.configuration.recommendationReach, .48);
+  assert.equal(report.configuration.recommendationDialect, "en-GB");
+  assert.deepEqual(report.configuration.recommendationWeights, { sound: .92, meaning: 0, utility: .08 });
+  assert.equal(report.workloads.indexedRecommendationPass.summary.samples, 1);
+  assert.ok(report.workloads.indexedRecommendationQuery.summary.observedP95Ms > 0);
+  assert.equal("p95Ms" in report.workloads.indexedRecommendationQuery.summary, false);
   assert.match(report.caveats[0], /Diagnostic only/i);
   assert.ok(Number.isFinite(report.checksum));
 });

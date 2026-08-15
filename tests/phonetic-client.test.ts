@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 // @ts-expect-error Node's experimental type stripper requires the explicit extension.
-import { PhoneticSearchClient } from "../lib/phonetic-search/client.ts";
+import { PhoneticSearchClient, searchCandidateId } from "../lib/phonetic-search/client.ts";
 import type {
   PhoneticWorkerEvent,
   PhoneticWorkerRequest,
-} from "../lib/phonetic-search/protocol.ts";
+} from "../lib/phonetic-search/protocol";
 
 class FakePhoneticWorker {
   readonly requests: PhoneticWorkerRequest[] = [];
@@ -36,6 +36,17 @@ class FakePhoneticWorker {
     this.messageListeners.forEach((listener) => listener(message));
   }
 }
+
+test("candidate IDs preserve punctuation, boundaries, and item kind", () => {
+  const ids = [
+    searchCandidateId("word", "first-class"),
+    searchCandidateId("phrase", "first class"),
+    searchCandidateId("word", "last-minute"),
+    searchCandidateId("phrase", "last minute"),
+  ];
+  assert.equal(new Set(ids).size, ids.length);
+  assert.notEqual(searchCandidateId("word", "first class"), searchCandidateId("phrase", "first class"));
+});
 
 test("phonetic clients ignore events from superseded search requests", async () => {
   const worker = new FakePhoneticWorker();
